@@ -1,0 +1,110 @@
+{
+    "business_types": {
+        "S001": {
+            "name": "deposit",
+            "keywords": {
+                "zh": [
+                    "充值",
+                    "充钱"
+                ],
+                "en": [
+                    "deposit",
+                    "recharge",
+                    "top up"
+                ],
+                "ja": [
+                    "入金",
+                    "チャージ"
+                ],
+                "th": [
+                    "เติมเงิน"
+                ],
+                "tl": [
+                    "mag-deposit"
+                ]
+            },
+            "responses": {
+                "zh": "您正在进行充值业务，请按照提示操作。",
+                "en": "You are making a deposit. Please follow the instructions.",
+                "ja": "入金手続きを行っています。指示に従ってください。",
+                "th": "คุณกำลังทำธุรกรรมการเติมเงิน โปรดทำตามคำแนะนำ",
+                "tl": "Ikaw ay gumagawa ng deposit. Mangyaring sundin ang mga tagubilin."
+            }
+        },
+        "S002": {
+            "name": "withdrawal",
+            "keywords": {
+                "zh": [
+                    "提现",
+                    "取钱"
+                ],
+                "en": [
+                    "withdraw",
+                    "cash out"
+                ],
+                "ja": [
+                    "出金",
+                    "引き出し"
+                ],
+                "th": [
+                    "ถอนเงิน"
+                ],
+                "tl": [
+                    "mag-withdraw"
+                ]
+            },
+            "responses": {
+                "zh": "您正在进行提现业务，请按照提示操作。",
+                "en": "You are making a withdrawal. Please follow the instructions.",
+                "ja": "出金手続きを行っています。指示に従ってください。",
+                "th": "คุณกำลังทำธุรกรรมการถอนเงิน โปรดทำตามคำแนะนำ",
+                "tl": "Ikaw ay gumagawa ng withdrawal. Mangyaring sundin ang mga tagubilin."
+            }
+        }
+    },
+    "human_service": {
+        "keywords": {
+            "zh": [
+                "人工",
+                "客服",
+                "人员"
+            ],
+            "en": [
+                "agent",
+                "human",
+                "staff",
+                "customer service"
+            ],
+            "ja": [
+                "オペレーター",
+                "担当者"
+            ],
+            "th": [
+                "พนักงาน",
+                "เจ้าหน้าที่"
+            ],
+            "tl": [
+                "tao",
+                "customer",
+                "ahente"
+            ]
+        },
+        "responses": {
+            "zh": "您的请求较为复杂，正在为您转接人工客服，请稍候...",
+            "en": "Your request is complex. We are connecting you to a human agent. Please wait...",
+            "ja": "ご要望が複雑なため、オペレーターに接続しています。少々お待ちください...",
+            "th": "คำขอของคุณซับซ้อน เรากำลังเชื่อมต่อคุณกับเจ้าหน้าที่ โปรดรอสักครู่...",
+            "tl": "Ang iyong kahilingan ay komplikado. Kinokonekta ka namin sa isang ahente. Mangyaring maghintay..."
+        }
+    },
+    "login": {
+        "responses": {
+            "zh": "请先登录后再继续操作。",
+            "en": "Please login first to continue.",
+            "ja": "続行するには、まずログインしてください。",
+            "th": "โปรดเข้าสู่ระบบก่อนเพื่อดำเนินการต่อ",
+            "tl": "Mangyaring mag-login muna upang magpatuloy."
+        }
+    },
+    "default_language": "en"
+}

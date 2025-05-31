@@ -43,7 +43,7 @@ python app.py
   "user_id": "u1001",
   "platform": "ph",
   "language": "en",
-  "status": 1,
+  "status": 1,// 0未登陆，1代表登陆
   "messages": "Hi, I need help.",
   "type":"", //业务种类
   "history": [
