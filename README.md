@@ -45,6 +45,7 @@ python app.py
   "language": "en",
   "status": 1,
   "messages": "Hi, I need help.",
+  "type":"", //业务种类
   "history": [
     { "role": "user", "content": "我家洗衣机坏了，想报修。" },
     { "role": "AI", "content": "请提供订单号和购买时间。" },
