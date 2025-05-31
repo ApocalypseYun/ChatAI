@@ -6,35 +6,11 @@ from pydantic import BaseModel
 # 导入配置和其他模块
 from src.config import get_config
 # 假设这些函数在其他模块中定义
-from src.intent import identify_intent, identify_stage
+from src.workflow_check import identify_intent, identify_stage
 from src.reply import get_unauthenticated_reply
+from src.util import MessageRequest, MessageResponse
 
 logger = logging.getLogger("chatai-api")
-
-class MessageRequest(BaseModel):
-    session_id: str
-    user_id: str
-    platform: str
-    language: str = "en"
-    status: int = 1  # 0：未登录，1：已登录
-    type: Optional[str] = None
-    messages: str
-    history: Optional[List[Dict[str, Any]]] = None
-    images: Optional[List[str]] = None
-    metadata: Optional[Dict[str, Any]] = None
-    site: int = 1
-    transfer_human: int = 0
-
-class MessageResponse(BaseModel):
-    session_id: str
-    status: str
-    response: str
-    stage: str = "working"
-    metadata: Dict[str, Any] = {}
-    images: Optional[List[str]] = None
-    site: int = 1
-    type: Optional[str] = None
-    transfer_human: int = 0
 
 def handle_api_calls(metadata: Dict[str, Any]) -> Dict[str, Any]:
     """

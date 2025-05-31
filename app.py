@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from typing import Dict, List, Optional, Any
 from contextlib import asynccontextmanager
 import uvicorn
@@ -11,6 +10,7 @@ import time
 # 导入配置模块和处理模块
 from src.config import init_config, reload_config
 from src.process import process_message
+from src.util import MessageRequest, MessageResponse
 
 # 配置日志
 logging.basicConfig(
@@ -49,27 +49,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 定义请求模型
-class MessageRequest(BaseModel):
-    session_id: str
-    user_id: str
-    platform: str
-    language: str = "en"
-    status: int = 1
-    type: str = ""
-    messages: str
-    history: Optional[List[Dict[str, Any]]] = None
-    images: Optional[List[str]] = None
-    metadata: Optional[Dict[str, Any]] = None
 
-# 定义响应模型
-class MessageResponse(BaseModel):
-    session_id: str
-    status: str
-    response: str
-    stage: str
-    metadata: Dict[str, Any]
-    images: Optional[List[str]] = None
 
 # 请求处理时间中间件
 @app.middleware("http")
