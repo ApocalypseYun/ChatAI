@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from src.config import get_config
 # 假设这些函数在其他模块中定义
 from src.workflow_check import identify_intent, identify_stage
-from src.reply import get_unauthenticated_reply
+from src.reply import get_unauthenticated_reply, build_reply_with_prompt, call_openapi_model, OPENAI_API_KEY
 from src.util import MessageRequest, MessageResponse
 
 logger = logging.getLogger("chatai-api")
@@ -36,7 +36,7 @@ def handle_api_calls(metadata: Dict[str, Any]) -> Dict[str, Any]:
             
     return result
 
-def process_message(request: MessageRequest) -> MessageResponse:
+async def process_message(request: MessageRequest) -> MessageResponse:
     """
     处理用户消息并生成响应
     
@@ -96,15 +96,26 @@ def process_message(request: MessageRequest) -> MessageResponse:
         stage_number = identify_stage(
             message_type,
             request.messages,
-            request.history or [],
-            request.language
+            request.history or []
         )
         logger.info(f"识别到的流程步骤: {stage_number}")
         
         # 这里应该根据意图类型和流程步骤获取回复内容
-        # 简化示例，实际应该根据识别结果和配置生成回复
         response_text = ""
-        # 根据步骤生成不同的
+        business_types = config.get("business_types", {})
+        workflow = business_types.get(message_type, {}).get("workflow", {})
+        step_info = workflow.get(str(stage_number), {})
+        # S001的1、2阶段调用AI生成自然回复
+        if message_type == "S001" and str(stage_number) in ["1", "2"]:
+            # 获取推荐回复内容
+            stage_response = step_info.get("response", {})
+            stage_text = stage_response.get("text") or step_info.get("step", "")
+            prompt = build_reply_with_prompt(request.history or [], request.messages, stage_text, request.language)
+            response_text = await call_openapi_model(prompt=prompt, api_key=OPENAI_API_KEY)
+        elif step_info and step_info.get("step"):
+            response_text = step_info["step"]
+        else:
+            response_text = "未找到对应的流程步骤，请联系人工客服。"
         
         # 构建响应
         response = MessageResponse(

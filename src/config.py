@@ -42,7 +42,12 @@ def load_business_config() -> Dict:
                             "ja": "入金手続きを行っています。指示に従ってください。",
                             "th": "คุณกำลังทำธุรกรรมการเติมเงิน โปรดทำตามคำแนะนำ",
                             "tl": "Ikaw ay gumagawa ng deposit. Mangyaring sundin ang mga tagubilin."
-                        }
+                        },
+                        "workflow": {
+                            "1": {"step": "询问用户需要查询的【订单编号】","response": {"text": "您需要查询的【订单编号】是多少？"},"image":""},
+                            "2": {"step": "不知道【订单编号】","response":{"text": "按照下面图片的指引进行操作"},"image":""}},
+                            "3": {"step": "提供【订单编号】"},
+                        
                     },
                     "S002": {
                         "name": "withdrawal",

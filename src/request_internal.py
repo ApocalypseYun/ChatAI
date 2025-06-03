@@ -1,5 +1,5 @@
 from typing import Optional, Dict, Any
-from util import call_backend_service
+from src.util import call_backend_service
 
 # A001 充值 - 查询用户支付状态
 async def query_recharge_status(session_id: str, order_no: str, url: str) -> Dict[str, Any]:
