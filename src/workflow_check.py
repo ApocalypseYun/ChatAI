@@ -4,10 +4,10 @@
 
 from typing import List, Dict, Any
 from src.util import call_openapi_model  # 异步方法
-import os
-from src.config import get_config  # 新增导入
+from src.config import get_config
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # 从环境变量读取
+config = get_config()
+api_key= config.get("api_key", 'default_api_key')
 
 def _build_intent_prompt(messages: str, history: List[Dict[str, Any]]) -> str:
     """
@@ -76,7 +76,7 @@ async def identify_intent(messages: str, history: List[Dict[str, Any]], language
         return matched_intent
     # 匹配不到再用 openai
     prompt = _build_intent_prompt(messages, history)
-    reply = await call_openapi_model(prompt=prompt, api_key=OPENAI_API_KEY)
+    reply = await call_openapi_model(prompt=prompt, api_key=api_key)
     ai_result = reply.strip()
     # 校验AI返回的key是否合法
     config = get_config()
@@ -88,7 +88,7 @@ async def identify_intent(messages: str, history: List[Dict[str, Any]], language
 
 async def identify_stage(intent: str, messages: List[str], history: List[Dict[str, Any]]) -> str:
     prompt = _build_stage_prompt(intent, messages, history)
-    reply = await call_openapi_model(prompt=prompt, api_key=OPENAI_API_KEY)
+    reply = await call_openapi_model(prompt=prompt, api_key=api_key)
     ai_result = reply.strip()
     # 校验AI返回的key是否合法
     config = get_config()

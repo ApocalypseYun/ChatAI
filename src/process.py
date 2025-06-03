@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from src.config import get_config
 # 假设这些函数在其他模块中定义
 from src.workflow_check import identify_intent, identify_stage
-from src.reply import get_unauthenticated_reply, build_reply_with_prompt, call_openapi_model, OPENAI_API_KEY
+from src.reply import get_unauthenticated_reply, build_reply_with_prompt, call_openapi_model
 from src.util import MessageRequest, MessageResponse
 
 logger = logging.getLogger("chatai-api")
@@ -111,7 +111,7 @@ async def process_message(request: MessageRequest) -> MessageResponse:
             stage_response = step_info.get("response", {})
             stage_text = stage_response.get("text") or step_info.get("step", "")
             prompt = build_reply_with_prompt(request.history or [], request.messages, stage_text, request.language)
-            response_text = await call_openapi_model(prompt=prompt, api_key=OPENAI_API_KEY)
+            response_text = await call_openapi_model(prompt=prompt, api_key=config.get("api_key", 'default_api_key'))
         elif step_info and step_info.get("step"):
             response_text = step_info["step"]
         else:

@@ -2,11 +2,6 @@
 回复模块
 """
 
-from src.util import call_openapi_model
-import os
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
 def get_unauthenticated_reply(language: str) -> str:
     """
     获取未登录的回复
