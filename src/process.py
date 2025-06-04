@@ -1,5 +1,6 @@
 import logging
 import time
+import re
 from typing import Dict, List, Any, Optional
 from pydantic import BaseModel
 
@@ -7,8 +8,10 @@ from pydantic import BaseModel
 from src.config import get_config
 # 假设这些函数在其他模块中定义
 from src.workflow_check import identify_intent, identify_stage
-from src.reply import get_unauthenticated_reply, build_reply_with_prompt, call_openapi_model
-from src.util import MessageRequest, MessageResponse
+from src.reply import get_unauthenticated_reply, build_reply_with_prompt
+from src.util import MessageRequest, MessageResponse, call_openapi_model  # 异步方法
+from src.telegram import send_to_telegram
+from src.request_internal import query_recharge_status
 
 logger = logging.getLogger("chatai-api")
 
@@ -76,7 +79,7 @@ async def process_message(request: MessageRequest) -> MessageResponse:
                 "timestamp": time.time()
             },
             site=request.site,
-            type="unauthenticated",
+            type="",
             transfer_human=request.transfer_human
         )
     else:  # 已登录
@@ -85,44 +88,80 @@ async def process_message(request: MessageRequest) -> MessageResponse:
         # 如果type为None，进行意图识别
         if message_type is None:
             # 调用外部意图识别函数
-            message_type = identify_intent(
+            message_type = await identify_intent(
                 request.messages, 
                 request.history or [], 
                 request.language
             )
             logger.info(f"识别到的意图类型: {message_type}")
-        
-        # 识别流程步骤
-        stage_number = identify_stage(
-            message_type,
-            request.messages,
-            request.history or []
-        )
-        logger.info(f"识别到的流程步骤: {stage_number}")
-        
-        # 这里应该根据意图类型和流程步骤获取回复内容
+
         response_text = ""
-        business_types = config.get("business_types", {})
-        workflow = business_types.get(message_type, {}).get("workflow", {})
-        step_info = workflow.get(str(stage_number), {})
-        # S001的1、2阶段调用AI生成自然回复
-        if message_type == "S001" and str(stage_number) in ["1", "2"]:
-            # 获取推荐回复内容
-            stage_response = step_info.get("response", {})
-            stage_text = stage_response.get("text") or step_info.get("step", "")
-            prompt = build_reply_with_prompt(request.history or [], request.messages, stage_text, request.language)
-            response_text = await call_openapi_model(prompt=prompt, api_key=config.get("api_key", 'default_api_key'))
-        elif step_info and step_info.get("step"):
-            response_text = step_info["step"]
+        response_image = []
+        response_stage = "working"
+        transfer_human = 0
+
+        if message_type == "human_service":
+            response_text = "您需要人工客服的帮助，请稍等。"
+            response_stage = "working"
+            transfer_human = 1
+            
         else:
-            response_text = "未找到对应的流程步骤，请联系人工客服。"
-        
+            # 识别流程步骤
+            stage_number = await identify_stage(
+                message_type,
+                request.messages,
+                request.history or []
+            )
+            logger.info(f"识别到的流程步骤: {stage_number}")
+            
+            # 这里应该根据意图类型和流程步骤获取回复内容
+            business_types = config.get("business_types", {})
+            workflow = business_types.get(message_type, {}).get("workflow", {})
+            step_info = workflow.get(str(stage_number), {})
+            # S001的1、2阶段调用AI生成自然回复
+            if message_type == "S001":
+                if str(stage_number) in ["1", "2", "4"]:
+                    # 获取推荐回复内容
+                    stage_response = step_info.get("response", {})
+                    stage_text = stage_response.get("text") or step_info.get("step", "")
+                    prompt = build_reply_with_prompt(request.history or [], request.messages, stage_text, request.language)
+                    response_text = await call_openapi_model(prompt=prompt)
+                    stage_image = stage_response.get("image", "")
+                    if stage_image:
+                        response_image = [stage_image]
+                    response_stage = "working"
+                elif str(stage_number) == "3":
+                    # 检查是否上传图片
+                    if request.images and len(request.images) > 0:
+                        bot_token = config.get("telegram_bot_token", "")
+                        chat_id = config.get("telegram_chat_id", "")
+                        if bot_token and chat_id:
+                            await send_to_telegram(request.images, bot_token, chat_id, username=request.user_id)
+                        response_text = "您上传了图片，已为您转接人工客服。"
+                        transfer_human = 1
+                        response_stage = "finish"
+                    else:
+                        order_no = extract_order_no(request.messages, request.history)
+                        if order_no:
+                            api_result = await query_recharge_status(request.session_id, order_no)
+                            status = api_result.get("status", "未知")
+                            msg = api_result.get("msg", "")
+                            response_text = f"订单号{order_no}的充值状态为：{status} {msg}"
+                            prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
+                            response_text = await call_openapi_model(prompt=prompt)
+                            response_stage = "finish"
+                        else:
+                            response_text = "未能识别到您的订单号，已为您转接人工客服。"
+                            transfer_human = 1
+                            response_stage = "working"
+            
         # 构建响应
         response = MessageResponse(
             session_id=request.session_id,
             status="success",
             response=response_text,
-            stage=str(stage_number),
+            stage=response_stage,
+            images=response_image,
             metadata={
                 "intent": message_type,
                 "api_results": api_results,
@@ -130,8 +169,26 @@ async def process_message(request: MessageRequest) -> MessageResponse:
             },
             site=request.site,
             type=message_type,
-            transfer_human=request.transfer_human
+            transfer_human=transfer_human
         )
     
     logger.info(f"会话 {request.session_id} 处理完成")
     return response
+
+def extract_order_no(messages, history):
+    """
+    从消息和历史中提取订单号（假设为10位及以上数字）
+    """
+    order_no_pattern = r"\\b\\d{10,}\\b"
+    all_text = ""
+    if isinstance(messages, list):
+        all_text += " ".join([str(m) for m in messages])
+    else:
+        all_text += str(messages)
+    if history:
+        for turn in history:
+            all_text += " " + str(turn.get("content", ""))
+    match = re.search(order_no_pattern, all_text)
+    if match:
+        return match.group(0)
+    return None

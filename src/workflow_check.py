@@ -7,7 +7,7 @@ from src.util import call_openapi_model  # 异步方法
 from src.config import get_config
 
 config = get_config()
-api_key= config.get("api_key", 'default_api_key')
+api_key= config.get("api_key", "")
 
 def _build_intent_prompt(messages: str, history: List[Dict[str, Any]]) -> str:
     """

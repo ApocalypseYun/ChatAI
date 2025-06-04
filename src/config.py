@@ -47,6 +47,7 @@ def load_business_config() -> Dict:
                             "1": {"step": "询问用户需要查询的【订单编号】","response": {"text": "您需要查询的【订单编号】是多少？"},"image":""},
                             "2": {"step": "不知道【订单编号】","response":{"text": "按照下面图片的指引进行操作"},"image":""}},
                             "3": {"step": "提供【订单编号】"},
+                            "4":{"step":"已完成","response":{"text":"还有什么需要帮助的吗？如果没有，非常感谢本次来信。"}}
                         
                     },
                     "S002": {
@@ -92,7 +93,8 @@ def load_business_config() -> Dict:
                         "tl": "Mangyaring mag-login muna upang magpatuloy."
                     }
                 },
-                "default_language": "en"
+                "default_language": "en",
+                "default_endpoint": "https://lodiapi-w-supervise2.lodirnd.com/aiChat"
             }
             
             # 确保配置目录存在

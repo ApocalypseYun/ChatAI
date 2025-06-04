@@ -94,7 +94,7 @@ async def api_process_message(request: MessageRequest):
         logger.info("处理会话 %s 的消息", request.session_id)
         
         # 调用处理函数，直接传递请求对象
-        response = process_message(request)
+        response = await process_message(request)
         
         logger.info("会话 %s 处理完成", request.session_id)
         return response
