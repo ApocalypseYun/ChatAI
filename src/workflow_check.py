@@ -28,7 +28,7 @@ def _build_intent_prompt(messages: str, history: List[Dict[str, Any]]) -> str:
     prompt += f"请只从以下业务类型中选择最匹配的一个，返回其编号（key）：\n{options}\n只返回编号（key），不要返回其他内容。"
     return prompt.strip()
 
-def _build_stage_prompt(intent: str, messages: List[str], history: List[Dict[str, Any]]) -> str:
+def _build_stage_prompt(intent: str, messages: str, history: List[Dict[str, Any]]) -> str:
     """
     构造用于识别会话阶段的提示语，要求AI只能从指定intent下的workflow key+step中选择
     """
@@ -41,8 +41,8 @@ def _build_stage_prompt(intent: str, messages: List[str], history: List[Dict[str
 当前业务类型编号：{intent}
 当前会话消息：
 """
-    for msg in messages:
-        prompt += f"{msg}\n"
+
+    prompt += f"{messages}\n"
     prompt += "历史消息记录：\n"
     for turn in history:
         role = turn.get("role", "user")
@@ -86,7 +86,7 @@ async def identify_intent(messages: str, history: List[Dict[str, Any]], language
     # 返回不合法，转人工
     return "human_service"
 
-async def identify_stage(intent: str, messages: List[str], history: List[Dict[str, Any]]) -> str:
+async def identify_stage(intent: str, messages: str, history: List[Dict[str, Any]]) -> str:
     prompt = _build_stage_prompt(intent, messages, history)
     reply = await call_openapi_model(prompt=prompt, api_key=api_key)
     ai_result = reply.strip()
