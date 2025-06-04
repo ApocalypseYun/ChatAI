@@ -11,7 +11,7 @@ from src.workflow_check import identify_intent, identify_stage
 from src.reply import get_unauthenticated_reply, build_reply_with_prompt
 from src.util import MessageRequest, MessageResponse, call_openapi_model  # 异步方法
 from src.telegram import send_to_telegram
-from src.request_internal import query_recharge_status
+from src.request_internal import query_recharge_status, query_withdrawal_status
 
 logger = logging.getLogger("chatai-api")
 
@@ -154,7 +154,103 @@ async def process_message(request: MessageRequest) -> MessageResponse:
                             response_text = "未能识别到您的订单号，已为您转接人工客服。"
                             transfer_human = 1
                             response_stage = "working"
-            
+            if message_type == "S002":
+                # 对不同阶段进行处理
+                if str(stage_number) == "1":
+                    # 阶段1：询问用户订单号
+                    # 从step_info中获取提示文本
+                    stage_response = step_info.get("response", {})
+                    stage_text = stage_response.get("text") or step_info.get("step", "")
+
+                    # 利用AI生成自然语言回复
+                    prompt = build_reply_with_prompt(request.history or [], request.messages, stage_text,
+                                                     request.language)
+                    response_text = await call_openapi_model(prompt=prompt)
+
+                    # 返回图片（如果有）
+                    stage_image = stage_response.get("image", "")
+                    if stage_image:
+                        response_image.append(stage_image)
+
+                    response_stage = "working"
+
+                elif str(stage_number) == "2":
+                    # 阶段2：用户表示不知道订单号，提示看图片操作
+                    stage_response = step_info.get("response", {})
+                    stage_text = stage_response.get("text") or step_info.get("step", "")
+
+                    prompt = build_reply_with_prompt(request.history or [], request.messages, stage_text,
+                                                     request.language)
+                    response_text = await call_openapi_model(prompt=prompt)
+
+                    stage_image = stage_response.get("image", "")
+                    if stage_image:
+                        response_image.append(stage_image)
+
+                    response_stage = "working"
+
+                elif str(stage_number) == "3":
+                    # 阶段3：用户提供订单号，开始处理提现状态查询
+
+                    # 先判断用户是否上传了图片，若有图片优先转人工处理
+                    if request.images and len(request.images) > 0:
+                        bot_token = config.get("telegram_bot_token", "")
+                        chat_id = config.get("telegram_chat_id", "")
+                        if bot_token and chat_id:
+                            await send_to_telegram(request.images, bot_token, chat_id, username=request.user_id)
+                        response_text = "您上传了图片，已为您转接人工客服。"
+                        transfer_human = 1
+                        response_stage = "finish"
+                    else:
+                        # 试图从用户消息和上下文中提取订单号
+                        order_no = extract_order_no(request.messages, request.history)
+
+                        if order_no:
+                            # 调用提现状态查询接口A002查询提现状态
+                            api_result = await query_withdrawal_status(request.session_id, order_no)
+
+                            status = api_result.get("data").get("A002").get("status", None)
+                            if status:
+                                if status in ["rejected", "prepare", "oblock", "lock", "refused"]:
+                                    response_text = "根据您的提现订单状态, 已为您转接人工客服。"
+                                    transfer_human = 1
+                                    response_stage = "working"
+                                if status in ["obligation", "pending"]:
+                                    response_text = "您的提现订单正在处理中, 请您耐心等待。"
+                                    response_stage = "finish"
+                                if status == "Withdrawal successful":
+                                    response_text = "您已提现成功!。"
+                                    response_stage = "finish"
+                                if status == "canceled":
+                                    response_text = "您已取消提现!"
+                                    response_stage = "finish"
+                                if status in ["confiscate", "Withdrawal failed"]:
+                                    bot_token = config.get("telegram_bot_token", "")
+                                    chat_id = config.get("telegram_chat_id", "")
+                                    if bot_token and chat_id:
+                                        await send_to_telegram(request.images, bot_token, chat_id,
+                                                               username=request.user_id)
+                                    response_text = "已为您转接人工客服。"
+                                    transfer_human = 1
+                                    response_stage = "finish"
+                            else:
+                                response_text = "根据您提供的订单编号未查询到提现状态，已为您转接人工客服。"
+                                transfer_human = 1
+                                response_stage = "working"
+                        else:
+                            # 未识别出订单号，转接人工客服
+                            response_text = "未能识别到您的订单号，已为您转接人工客服。"
+                            transfer_human = 1
+                            response_stage = "working"
+                elif str(stage_number) == "4":
+                    # 阶段4：提现咨询处理完成后的感谢与结束语
+                    stage_response = step_info.get("response", {})
+                    stage_text = stage_response.get("text") or step_info.get("step", "")
+                    prompt = build_reply_with_prompt(request.history or [], request.messages, stage_text,
+                                                     request.language)
+                    response_text = await call_openapi_model(prompt=prompt)
+                    response_stage = "finish"
+
         # 构建响应
         response = MessageResponse(
             session_id=request.session_id,
