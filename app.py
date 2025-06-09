@@ -13,6 +13,7 @@ from typing import Dict, Any
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError
 
 # 导入配置模块和处理模块
 from src.config import init_config, reload_config
@@ -98,9 +99,12 @@ async def api_process_message(request: MessageRequest):
         
         logger.info("会话 %s 处理完成", request.session_id)
         return response
+    except ValidationError as e:
+        logger.warning("请求参数验证错误: %s", str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except ValueError as e:
         logger.warning("请求参数错误: %s", str(e))
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except Exception as e:
         logger.error("消息处理失败: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"消息处理失败: {str(e)}") from e

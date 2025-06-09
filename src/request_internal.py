@@ -7,7 +7,7 @@ from src.util import call_backend_service
 from src.config import get_config
 
 config = get_config()
-internal_endpoint = config.get("internal_endpoint", 'default_endpoint')
+internal_endpoint = config.get("default_endpoint", 'https://lodiapi-w-supervise2.lodirnd.com/aiChat')
 
 # AES 加密相关常量
 AES_KEY = 'c56f23sfhk935jqb'
@@ -123,3 +123,145 @@ async def query_user_eligibility(session_id: str,) -> Dict[str, Any]:
     encrypted_data = encrypt_payload(payload)
     headers = {"Content-Type": "application/json"}
     return await call_backend_service(url=url, method="POST", json_data={"data": encrypted_data}, headers=headers)
+
+# 数据提取函数
+def extract_recharge_status(response: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    从A001充值接口返回值中提取关键数据
+    参数：
+        response: API返回的完整响应
+    返回：
+        提取的关键数据字典
+    """
+    try:
+        data = response.get("data", {})
+        a001_data = data.get("A001", {})
+        return {
+            "status": a001_data.get("status", "unknown"),
+            "is_success": response.get("state", -1) == 0,
+            "message": response.get("message", "")
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "is_success": False,
+            "message": f"数据提取失败: {str(e)}"
+        }
+
+
+def extract_withdrawal_status(response: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    从A002提现接口返回值中提取关键数据
+    参数：
+        response: API返回的完整响应
+    返回：
+        提取的关键数据字典
+    """
+    try:
+        data = response.get("data", {})
+        a002_data = data.get("A002", {})
+        return {
+            "status": a002_data.get("status", "unknown"),
+            "userId": a002_data.get("userId", ""),
+            "is_success": response.get("state", -1) == 0,
+            "message": response.get("message", "")
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "userId": "",
+            "is_success": False,
+            "message": f"数据提取失败: {str(e)}"
+        }
+
+
+def extract_activity_list(response: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    从A003活动接口返回值中提取关键数据
+    参数：
+        response: API返回的完整响应
+    返回：
+        提取的关键数据字典
+    """
+    try:
+        data = response.get("data", {})
+        a003_data = data.get("A003", {})
+        activity_list = a003_data.get("list", {})
+        
+        return {
+            "agent_activities": activity_list.get("Agent", []),
+            "deposit_activities": activity_list.get("Deposit", []),
+            "rebate_activities": activity_list.get("Rebate", []),
+            "total_activities": sum(len(v) for v in activity_list.values()),
+            "is_success": response.get("state", -1) == 0,
+            "message": response.get("message", "")
+        }
+    except Exception as e:
+        return {
+            "agent_activities": [],
+            "deposit_activities": [],
+            "rebate_activities": [],
+            "total_activities": 0,
+            "is_success": False,
+            "message": f"数据提取失败: {str(e)}"
+        }
+
+
+def extract_user_eligibility(response: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    从A004用户条件接口返回值中提取关键数据
+    参数：
+        response: API返回的完整响应
+    返回：
+        提取的关键数据字典
+    """
+    try:
+        data = response.get("data", {})
+        a004_data = data.get("A004", {})
+        
+        status = a004_data.get("status", "unknown")
+        
+        return {
+            "status": status,
+            "userId": a004_data.get("username", ""),
+            "message": a004_data.get("msg", ""),
+            "is_waiting": status == "Waiting paid",
+            "is_success": response.get("state", -1) == 0,
+            "api_message": response.get("message", "")
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "userId": "",
+            "message": "",
+            "is_waiting": False,
+            "is_success": False,
+            "api_message": f"数据提取失败: {str(e)}"
+        }
+
+
+# 通用数据提取函数
+def extract_api_response(response: Dict[str, Any], api_code: str) -> Dict[str, Any]:
+    """
+    通用API响应数据提取函数
+    参数：
+        response: API返回的完整响应
+        api_code: API代码 (A001, A002, A003, A004)
+    返回：
+        提取的关键数据字典
+    """
+    extractors = {
+        "A001": extract_recharge_status,
+        "A002": extract_withdrawal_status,
+        "A003": extract_activity_list,
+        "A004": extract_user_eligibility
+    }
+    
+    extractor = extractors.get(api_code)
+    if extractor:
+        return extractor(response)
+    else:
+        return {
+            "error": f"不支持的API代码: {api_code}",
+            "is_success": False
+        }

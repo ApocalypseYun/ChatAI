@@ -26,76 +26,349 @@ def load_business_config() -> Dict:
         if not os.path.exists(BUSINESS_CONFIG_PATH):
             # 如果配置文件不存在，创建默认配置
             default_config = {
-                "business_types": {
-                    "S001": {
-                        "name": "deposit",
-                        "keywords": {
-                            "zh": ["充值", "充钱"],
-                            "en": ["deposit", "recharge", "top up"],
-                            "ja": ["入金", "チャージ"],
-                            "th": ["เติมเงิน"],
-                            "tl": ["mag-deposit"]
-                        },
-                        "responses": {
-                            "zh": "您正在进行充值业务，请按照提示操作。",
-                            "en": "You are making a deposit. Please follow the instructions.",
-                            "ja": "入金手続きを行っています。指示に従ってください。",
-                            "th": "คุณกำลังทำธุรกรรมการเติมเงิน โปรดทำตามคำแนะนำ",
-                            "tl": "Ikaw ay gumagawa ng deposit. Mangyaring sundin ang mga tagubilin."
-                        },
-                        "workflow": {
-                            "1": {"step": "询问用户需要查询的【订单编号】","response": {"text": "您需要查询的【订单编号】是多少？"},"image":""},
-                            "2": {"step": "不知道【订单编号】","response":{"text": "按照下面图片的指引进行操作"},"image":""}},
-                            "3": {"step": "提供【订单编号】"},
-                            "4":{"step":"已完成","response":{"text":"还有什么需要帮助的吗？如果没有，非常感谢本次来信。"}}
-                        
+    "business_types": {
+        "S001": {
+            "name": "deposit",
+            "keywords": {
+                "zh": [
+                    "充值",
+                    "充钱"
+                ],
+                "en": [
+                    "deposit",
+                    "recharge",
+                    "top up"
+                ],
+                "ja": [
+                    "入金",
+                    "チャージ"
+                ],
+                "th": [
+                    "เติมเงิน"
+                ],
+                "tl": [
+                    "mag-deposit"
+                ]
+            },
+            "responses": {
+                "zh": "您正在进行充值业务，请按照提示操作。",
+                "en": "You are making a deposit. Please follow the instructions.",
+                "ja": "入金手続きを行っています。指示に従ってください。",
+                "th": "คุณกำลังทำธุรกรรมการเติมเงิน โปรดทำตามคำแนะนำ",
+                "tl": "Ikaw ay gumagawa ng deposit. Mangyaring sundin ang mga tagubilin."
+            },
+            "workflow": {
+                "1": {
+                    "step": "询问用户需要查询的【订单编号】",
+                    "response": {
+                        "text": "您需要查询的【订单编号】是多少？"
                     },
-                    "S002": {
-                        "name": "withdrawal",
-                        "keywords": {
-                            "zh": ["提现", "取钱"],
-                            "en": ["withdraw", "cash out"],
-                            "ja": ["出金", "引き出し"],
-                            "th": ["ถอนเงิน"],
-                            "tl": ["mag-withdraw"]
-                        },
-                        "responses": {
-                            "zh": "您正在进行提现业务，请按照提示操作。",
-                            "en": "You are making a withdrawal. Please follow the instructions.",
-                            "ja": "出金手続きを行っています。指示に従ってください。",
-                            "th": "คุณกำลังทำธุรกรรมการถอนเงิน โปรดทำตามคำแนะนำ",
-                            "tl": "Ikaw ay gumagawa ng withdrawal. Mangyaring sundin ang mga tagubilin."
-                        }
-                    }
+                    "image": ""
                 },
-                "human_service": {
-                    "keywords": {
-                        "zh": ["人工", "客服", "人员"],
-                        "en": ["agent", "human", "staff", "customer service"],
-                        "ja": ["オペレーター", "担当者"],
-                        "th": ["พนักงาน", "เจ้าหน้าที่"],
-                        "tl": ["tao", "customer", "ahente"]
+                "2": {
+                    "step": "不知道【订单编号】",
+                    "response": {
+                        "text": "按照下面图片的指引进行操作"
                     },
-                    "responses": {
-                        "zh": "您的请求较为复杂，正在为您转接人工客服，请稍候...",
-                        "en": "Your request is complex. We are connecting you to a human agent. Please wait...",
-                        "ja": "ご要望が複雑なため、オペレーターに接続しています。少々お待ちください...",
-                        "th": "คำขอของคุณซับซ้อน เรากำลังเชื่อมต่อคุณกับเจ้าหน้าที่ โปรดรอสักครู่...",
-                        "tl": "Ang iyong kahilingan ay komplikado. Kinokonekta ka namin sa isang ahente. Mangyaring maghintay..."
-                    }
+                    "image": "https://img.lodirnd.com/lodi/depositOrder.webp"
                 },
-                "login": {
-                    "responses": {
-                        "zh": "请先登录后再继续操作。",
-                        "en": "Please login first to continue.",
-                        "ja": "続行するには、まずログインしてください。",
-                        "th": "โปรดเข้าสู่ระบบก่อนเพื่อดำเนินการต่อ",
-                        "tl": "Mangyaring mag-login muna upang magpatuloy."
-                    }
+                "3": {
+                    "step": "提供【订单编号】"
                 },
-                "default_language": "en",
-                "default_endpoint": "https://lodiapi-w-supervise2.lodirnd.com/aiChat"
+                "4": {
+                    "step": "已完成",
+                    "response": {
+                        "text": "还有什么需要帮助的吗？如果没有，非常感谢本次来信。"
+                    }
+                }
+            },
+            "status_messages": {
+                "recharge_successful": {
+                    "zh": "充值成功，请等待。",
+                    "en": "Recharge successful, please wait."
+                },
+                "payment_canceled": {
+                    "zh": "您已取消支付。",
+                    "en": "You have canceled the payment."
+                },
+                "payment_issue": {
+                    "zh": "您的支付出现问题，已为您转接人工客服。",
+                    "en": "There is an issue with your payment. You have been transferred to customer service."
+                },
+                "status_unclear": {
+                    "zh": "支付状态需要进一步确认，已为您转接人工客服。",
+                    "en": "Payment status needs further confirmation. You have been transferred to customer service."
+                },
+                "query_failed": {
+                    "zh": "查询充值状态失败，已为您转接人工客服。",
+                    "en": "Unable to query recharge status. You have been transferred to customer service."
+                },
+                "order_not_found": {
+                    "zh": "未能识别到您的订单号，请明确提供您的订单号。",
+                    "en": "Could not identify your order number. Please provide your order number clearly."
+                },
+                "image_uploaded": {
+                    "zh": "您上传了图片，已为您转接人工客服。",
+                    "en": "You uploaded an image. You have been transferred to customer service."
+                }
             }
+        },
+        "S002": {
+            "name": "withdrawal",
+            "keywords": {
+                "zh": [
+                    "提现",
+                    "取钱"
+                ],
+                "en": [
+                    "withdraw",
+                    "cash out"
+                ],
+                "ja": [
+                    "出金",
+                    "引き出し"
+                ],
+                "th": [
+                    "ถอนเงิน"
+                ],
+                "tl": [
+                    "mag-withdraw"
+                ]
+            },
+            "responses": {
+                "zh": "您正在进行提现业务，请按照提示操作。",
+                "en": "You are making a withdrawal. Please follow the instructions.",
+                "ja": "出金手続きを行っています。指示に従ってください。",
+                "th": "คุณกำลังทำธุรกรรมการถอนเงิน โปรดทำตามคำแนะนำ",
+                "tl": "Ikaw ay gumagawa ng withdrawal. Mangyaring sundin ang mga tagubilin."
+            },
+            "workflow": {
+                "1": {
+                    "step": "询问用户需要查询的【订单编号】",
+                    "response": {
+                        "text": "您需要查询的【订单编号】是多少？"
+                    },
+                    "image": ""
+                },
+                "2": {
+                    "step": "不知道【订单编号】",
+                    "response": {
+                        "text": "按照下面图片的指引进行操作"
+                    },
+                    "image": "https://img.lodirnd.com/lodi/withdrawalOrder.webp"
+                },
+                "3": {
+                    "step": "提供【订单编号】"
+                },
+                "4": {
+                    "step": "已完成",
+                    "response": {
+                        "text": "还有什么需要帮助的吗？如果没有，非常感谢本次来信。"
+                    }
+                }
+            },
+            "status_messages": {
+                "withdrawal_successful": {
+                    "zh": "提现成功！",
+                    "en": "Withdrawal successful!"
+                },
+                "withdrawal_processing": {
+                    "zh": "您的提现正在处理中，请耐心等待。",
+                    "en": "Your withdrawal is being processed, please wait patiently."
+                },
+                "withdrawal_canceled": {
+                    "zh": "您的提现已取消。",
+                    "en": "Your withdrawal has been canceled."
+                },
+                "withdrawal_issue": {
+                    "zh": "您的提现出现问题，已为您转接人工客服。",
+                    "en": "There is an issue with your withdrawal. You have been transferred to customer service."
+                },
+                "withdrawal_failed": {
+                    "zh": "提现失败，已为您转接人工客服。",
+                    "en": "Withdrawal failed. You have been transferred to customer service."
+                },
+                "query_failed": {
+                    "zh": "查询提现状态失败，已为您转接人工客服。",
+                    "en": "Unable to query withdrawal status. You have been transferred to customer service."
+                },
+                "order_not_found": {
+                    "zh": "未能识别到您的订单号，请明确提供您的订单号。",
+                    "en": "Could not identify your order number. Please provide your order number clearly."
+                },
+                "image_uploaded": {
+                    "zh": "您上传了图片，已为您转接人工客服。",
+                    "en": "You uploaded an image. You have been transferred to customer service."
+                }
+            }
+        },
+        "S003": {
+            "name": "activity",
+            "keywords": {
+                "zh": [
+                    "活动",
+                    "奖励",
+                    "彩金",
+                    "优惠",
+                    "红利",
+                    "返利",
+                    "返佣",
+                    "代理奖励",
+                    "存款奖励"
+                ],
+                "en": [
+                    "activity",
+                    "bonus",
+                    "promotion",
+                    "reward",
+                    "rebate",
+                    "agent",
+                    "deposit bonus",
+                    "cashback"
+                ],
+                "ja": [
+                    "アクティビティ",
+                    "ボーナス",
+                    "プロモーション",
+                    "報酬",
+                    "リベート"
+                ],
+                "th": [
+                    "กิจกรรม",
+                    "โบนัส",
+                    "โปรโมชัน",
+                    "รางวัล",
+                    "คืนเงิน"
+                ],
+                "tl": [
+                    "aktibidad",
+                    "bonus",
+                    "promosyon",
+                    "gantimpala",
+                    "rebate"
+                ]
+            },
+            "responses": {
+                "zh": "您正在查询活动相关信息，让我为您查看可用的活动。",
+                "en": "You are inquiring about activity information. Let me check the available activities for you.",
+                "ja": "アクティビティに関する情報をお問い合わせいただいています。利用可能なアクティビティを確認いたします。",
+                "th": "คุณกำลังสอบถามข้อมูลเกี่ยวกับกิจกรรม ให้ฉันตรวจสอบกิจกรรมที่มีให้คุณ",
+                "tl": "Ikaw ay nagtatanong tungkol sa impormasyon ng aktibidad. Hayaan akong tingnan ang mga available na aktibidad para sa iyo."
+            },
+            "workflow": {
+                "1": {
+                    "step": "查询活动列表并识别用户想要的活动",
+                    "response": {
+                        "text": "正在为您查询可用活动，请稍候...",
+                        "text_en": "Checking available activities for you, please wait..."
+                    },
+                    "description": "通过A003接口获取活动列表，使用AI识别用户想要查询的具体活动"
+                },
+                "2": {
+                    "step": "用户明确活动后查询领取状态",
+                    "response": {
+                        "text": "正在查询您指定活动的领取状态...",
+                        "text_en": "Checking the claim status of your specified activity..."
+                    },
+                    "description": "用户明确活动名称后，通过A004接口查询该活动的领取状态"
+                }
+            },
+            "status_messages": {
+                "conditions_not_met": {
+                    "zh": "很抱歉，您暂未达成该活动的领取条件。",
+                    "en": "Sorry, you have not met the requirements for this activity."
+                },
+                "paid_success": {
+                    "zh": "您的活动奖励已经发放完成！",
+                    "en": "Your activity reward has been successfully distributed!"
+                },
+                "waiting_paid": {
+                    "zh": "您已满足领取条件，还未到发放时间，请您耐心等待。",
+                    "en": "You meet the requirements, but it's not yet time for distribution. Please wait patiently."
+                },
+                "need_paid": {
+                    "zh": "您已满足条件，系统未自动发放，已为您转接人工客服处理。",
+                    "en": "You meet the requirements, but the system has not automatically distributed the reward. You have been transferred to customer service."
+                },
+                "unknown_status": {
+                    "zh": "活动状态需要进一步确认，已为您转接人工客服。",
+                    "en": "The activity status needs further confirmation. You have been transferred to customer service."
+                },
+                "no_activities": {
+                    "zh": "目前暂无可用活动，如有疑问请联系客服。",
+                    "en": "Currently, there are no available activities. If you have any questions, please contact customer service."
+                },
+                "query_failed": {
+                    "zh": "活动查询失败，已为您转接人工客服。",
+                    "en": "Activity query failed. You have been transferred to customer service."
+                },
+                "unclear_activity": {
+                    "zh": "我为您找到了以下活动，请明确您想查询的具体活动：",
+                    "en": "I found the following activities for you. Please specify which activity you want to inquire about:"
+                },
+                "still_unclear": {
+                    "zh": "抱歉，仍然无法确定您要查询的具体活动，已为您转接人工客服。",
+                    "en": "Sorry, I still cannot determine the specific activity you want to inquire about. You have been transferred to customer service."
+                }
+            }
+        }
+    },
+    "human_service": {
+        "keywords": {
+            "zh": [
+                "人工",
+                "客服",
+                "人员"
+            ],
+            "en": [
+                "agent",
+                "human",
+                "staff",
+                "customer service"
+            ],
+            "ja": [
+                "オペレーター",
+                "担当者"
+            ],
+            "th": [
+                "พนักงาน",
+                "เจ้าหน้าที่"
+            ],
+            "tl": [
+                "tao",
+                "customer",
+                "ahente"
+            ]
+        },
+        "responses": {
+            "zh": "您的请求较为复杂，正在为您转接人工客服，请稍候...",
+            "en": "Your request is complex. We are connecting you to a human agent. Please wait...",
+            "ja": "ご要望が複雑なため、オペレーターに接続しています。少々お待ちください...",
+            "th": "คำขอของคุณซับซ้อน เรากำลังเชื่อมต่อคุณกับเจ้าหน้าที่ โปรดรอสักครู่...",
+            "tl": "Ang iyong kahilingan ay komplikado. Kinokonekta ka namin sa isang ahente. Mangyaring maghintay..."
+        }
+    },
+    "login": {
+        "responses": {
+            "zh": "请先登录后再继续操作。",
+            "en": "Please login first to continue.",
+            "ja": "続行するには、まずログインしてください。",
+            "th": "โปรดเข้าสู่ระบบก่อนเพื่อดำเนินการต่อ",
+            "tl": "Mangyaring mag-login muna upang magpatuloy."
+        }
+    },
+    "default_language": "en",
+    "default_endpoint": "https://lodiapi-w-supervise2.lodirnd.com/aiChat",
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "api_key": "",
+    "openai_api": {
+        "api_url": "https://api.openai.com/v1/chat/completions",
+        "default_model": "gpt-4",
+        "default_temperature": 0.7,
+        "default_max_tokens": 1024
+    }
+}
             
             # 确保配置目录存在
             os.makedirs(os.path.dirname(BUSINESS_CONFIG_PATH), exist_ok=True)
