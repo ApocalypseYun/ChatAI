@@ -1,6 +1,7 @@
 import json
 import os
 from typing import Dict, List, Optional, Any
+from .logging_config import get_logger
 
 # 业务配置文件路径
 BUSINESS_CONFIG_PATH = os.path.join(os.path.dirname(__file__), '../config/business_config.json')
@@ -17,13 +18,33 @@ def load_business_config() -> Dict:
     """
     global _business_config_cache
     
+    # 只有在日志系统初始化后才记录日志，避免循环导入
+    try:
+        logger = get_logger("chatai-config")
+    except:
+        logger = None
+    
     # 如果已有缓存，直接返回
     if _business_config_cache is not None:
+        if logger:
+            logger.debug(f"使用缓存的业务配置", extra={
+                'cache_size': len(_business_config_cache),
+                'business_types_count': len(_business_config_cache.get('business_types', {}))
+            })
         return _business_config_cache
     
     try:
+        if logger:
+            logger.info(f"开始加载业务配置文件", extra={
+                'config_path': BUSINESS_CONFIG_PATH
+            })
+        
         # 检查配置文件是否存在
         if not os.path.exists(BUSINESS_CONFIG_PATH):
+            if logger:
+                logger.warning(f"配置文件不存在，创建默认配置", extra={
+                    'config_path': BUSINESS_CONFIG_PATH
+                })
             # 如果配置文件不存在，创建默认配置
             default_config = {
     "business_types": {
@@ -85,31 +106,51 @@ def load_business_config() -> Dict:
             "status_messages": {
                 "recharge_successful": {
                     "zh": "充值成功，请等待。",
-                    "en": "Recharge successful, please wait."
+                    "en": "Recharge successful, please wait.",
+                    "th": "เติมเงินสำเร็จ กรุณารอ",
+                    "tl": "Matagumpay ang recharge, mangyaring maghintay."
                 },
                 "payment_canceled": {
                     "zh": "您已取消支付。",
-                    "en": "You have canceled the payment."
+                    "en": "You have canceled the payment.",
+                    "th": "คุณได้ยกเลิกการชำระเงินแล้ว",
+                    "tl": "Nakansela mo na ang bayad."
                 },
                 "payment_issue": {
                     "zh": "您的支付出现问题，已为您转接人工客服。",
-                    "en": "There is an issue with your payment. You have been transferred to customer service."
+                    "en": "There is an issue with your payment. You have been transferred to customer service.",
+                    "th": "การชำระเงินของคุณมีปัญหา คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "May problema sa inyong bayad. Na-transfer na kayo sa customer service."
                 },
                 "status_unclear": {
                     "zh": "支付状态需要进一步确认，已为您转接人工客服。",
-                    "en": "Payment status needs further confirmation. You have been transferred to customer service."
+                    "en": "Payment status needs further confirmation. You have been transferred to customer service.",
+                    "th": "สถานะการชำระเงินต้องการการยืนยันเพิ่มเติม คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "Kailangan ng karagdagang kumpirmasyon ang status ng bayad. Na-transfer na kayo sa customer service."
                 },
                 "query_failed": {
                     "zh": "查询充值状态失败，已为您转接人工客服。",
-                    "en": "Unable to query recharge status. You have been transferred to customer service."
+                    "en": "Unable to query recharge status. You have been transferred to customer service.",
+                    "th": "ไม่สามารถสอบถามสถานะการเติมเงินได้ คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "Hindi mahanap ang status ng recharge. Na-transfer na kayo sa customer service."
                 },
                 "order_not_found": {
                     "zh": "未能识别到您的订单号，请明确提供您的订单号。",
-                    "en": "Could not identify your order number. Please provide your order number clearly."
+                    "en": "Could not identify your order number. Please provide your order number clearly.",
+                    "th": "ไม่สามารถระบุหมายเลขคำสั่งซื้อของคุณได้ กรุณาระบุหมายเลขคำสั่งซื้อของคุณอย่างชัดเจน",
+                    "tl": "Hindi makita ang inyong order number. Mangyaring magbigay ng malinaw na order number."
                 },
                 "image_uploaded": {
                     "zh": "您上传了图片，已为您转接人工客服。",
-                    "en": "You uploaded an image. You have been transferred to customer service."
+                    "en": "You uploaded an image. You have been transferred to customer service.",
+                    "th": "คุณได้อัปโหลดรูปภาพแล้ว คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "Nag-upload kayo ng larawan. Na-transfer na kayo sa customer service."
+                },
+                "session_invalid": {
+                    "zh": "会话已失效，请重新登录后再试。",
+                    "en": "Session has expired. Please login again and try.",
+                    "th": "เซสชันหมดอายุแล้ว กรุณาเข้าสู่ระบบใหม่และลองอีกครั้ง",
+                    "tl": "Nag-expire na ang session. Mangyaring mag-login ulit at subukan."
                 }
             }
         },
@@ -170,35 +211,57 @@ def load_business_config() -> Dict:
             "status_messages": {
                 "withdrawal_successful": {
                     "zh": "提现成功！",
-                    "en": "Withdrawal successful!"
+                    "en": "Withdrawal successful!",
+                    "th": "ถอนเงินสำเร็จ!",
+                    "tl": "Matagumpay ang withdrawal!"
                 },
                 "withdrawal_processing": {
                     "zh": "您的提现正在处理中，请耐心等待。",
-                    "en": "Your withdrawal is being processed, please wait patiently."
+                    "en": "Your withdrawal is being processed, please wait patiently.",
+                    "th": "การถอนเงินของคุณกำลังดำเนินการ กรุณารอด้วยความอดทน",
+                    "tl": "Pinoproseso pa ang inyong withdrawal, mangyaring maghintay nang matagal."
                 },
                 "withdrawal_canceled": {
                     "zh": "您的提现已取消。",
-                    "en": "Your withdrawal has been canceled."
+                    "en": "Your withdrawal has been canceled.",
+                    "th": "การถอนเงินของคุณถูกยกเลิกแล้ว",
+                    "tl": "Nakansela na ang inyong withdrawal."
                 },
                 "withdrawal_issue": {
                     "zh": "您的提现出现问题，已为您转接人工客服。",
-                    "en": "There is an issue with your withdrawal. You have been transferred to customer service."
+                    "en": "There is an issue with your withdrawal. You have been transferred to customer service.",
+                    "th": "การถอนเงินของคุณมีปัญหา คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "May problema sa inyong withdrawal. Na-transfer na kayo sa customer service."
                 },
                 "withdrawal_failed": {
                     "zh": "提现失败，已为您转接人工客服。",
-                    "en": "Withdrawal failed. You have been transferred to customer service."
+                    "en": "Withdrawal failed. You have been transferred to customer service.",
+                    "th": "การถอนเงินล้มเหลว คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "Nabigo ang withdrawal. Na-transfer na kayo sa customer service."
                 },
                 "query_failed": {
                     "zh": "查询提现状态失败，已为您转接人工客服。",
-                    "en": "Unable to query withdrawal status. You have been transferred to customer service."
+                    "en": "Unable to query withdrawal status. You have been transferred to customer service.",
+                    "th": "ไม่สามารถสอบถามสถานะการถอนเงินได้ คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "Hindi mahanap ang status ng withdrawal. Na-transfer na kayo sa customer service."
                 },
                 "order_not_found": {
                     "zh": "未能识别到您的订单号，请明确提供您的订单号。",
-                    "en": "Could not identify your order number. Please provide your order number clearly."
+                    "en": "Could not identify your order number. Please provide your order number clearly.",
+                    "th": "ไม่สามารถระบุหมายเลขคำสั่งซื้อของคุณได้ กรุณาระบุหมายเลขคำสั่งซื้อของคุณอย่างชัดเจน",
+                    "tl": "Hindi makita ang inyong order number. Mangyaring magbigay ng malinaw na order number."
                 },
                 "image_uploaded": {
                     "zh": "您上传了图片，已为您转接人工客服。",
-                    "en": "You uploaded an image. You have been transferred to customer service."
+                    "en": "You uploaded an image. You have been transferred to customer service.",
+                    "th": "คุณได้อัปโหลดรูปภาพแล้ว คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "Nag-upload kayo ng larawan. Na-transfer na kayo sa customer service."
+                },
+                "session_invalid": {
+                    "zh": "会话已失效，请重新登录后再试。",
+                    "en": "Session has expired. Please login again and try.",
+                    "th": "เซสชันหมดอายุแล้ว กรุณาเข้าสู่ระบบใหม่และลองอีกครั้ง",
+                    "tl": "Nag-expire na ang session. Mangyaring mag-login ulit at subukan."
                 }
             }
         },
@@ -276,39 +339,63 @@ def load_business_config() -> Dict:
             "status_messages": {
                 "conditions_not_met": {
                     "zh": "很抱歉，您暂未达成该活动的领取条件。",
-                    "en": "Sorry, you have not met the requirements for this activity."
+                    "en": "Sorry, you have not met the requirements for this activity.",
+                    "th": "ขออภัย คุณยังไม่ได้ตรงตามข้อกำหนดสำหรับกิจกรรมนี้",
+                    "tl": "Pasensya na, hindi mo pa naabot ang mga requirements para sa aktibidad na ito."
                 },
                 "paid_success": {
                     "zh": "您的活动奖励已经发放完成！",
-                    "en": "Your activity reward has been successfully distributed!"
+                    "en": "Your activity reward has been successfully distributed!",
+                    "th": "รางวัลกิจกรรมของคุณได้รับการแจกจ่ายเรียบร้อยแล้ว!",
+                    "tl": "Matagumpay nang nabigay ang inyong activity reward!"
                 },
                 "waiting_paid": {
                     "zh": "您已满足领取条件，还未到发放时间，请您耐心等待。",
-                    "en": "You meet the requirements, but it's not yet time for distribution. Please wait patiently."
+                    "en": "You meet the requirements, but it's not yet time for distribution. Please wait patiently.",
+                    "th": "คุณมีคุณสมบัติแล้ว แต่ยังไม่ถึงเวลาแจกจ่าย กรุณารอด้วยความอดทน",
+                    "tl": "Natupad mo na ang mga requirements, pero hindi pa oras para sa distribution. Mangyaring maghintay nang matagal."
                 },
                 "need_paid": {
                     "zh": "您已满足条件，系统未自动发放，已为您转接人工客服处理。",
-                    "en": "You meet the requirements, but the system has not automatically distributed the reward. You have been transferred to customer service."
+                    "en": "You meet the requirements, but the system has not automatically distributed the reward. You have been transferred to customer service.",
+                    "th": "คุณมีคุณสมบัติแล้ว แต่ระบบไม่ได้แจกจ่ายโดยอัตโนมัติ คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "Natupad mo na ang mga requirements, pero hindi automatic na nabigay ng system. Na-transfer na kayo sa customer service."
                 },
                 "unknown_status": {
                     "zh": "活动状态需要进一步确认，已为您转接人工客服。",
-                    "en": "The activity status needs further confirmation. You have been transferred to customer service."
+                    "en": "The activity status needs further confirmation. You have been transferred to customer service.",
+                    "th": "สถานะกิจกรรมต้องการการยืนยันเพิ่มเติม คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "Kailangan ng karagdagang kumpirmasyon ang status ng aktibidad. Na-transfer na kayo sa customer service."
                 },
                 "no_activities": {
                     "zh": "目前暂无可用活动，如有疑问请联系客服。",
-                    "en": "Currently, there are no available activities. If you have any questions, please contact customer service."
+                    "en": "Currently, there are no available activities. If you have any questions, please contact customer service.",
+                    "th": "ขณะนี้ไม่มีกิจกรรมที่ใช้ได้ หากมีคำถามกรุณาติดต่อฝ่ายบริการลูกค้า",
+                    "tl": "Walang available na aktibidad sa ngayon. Kung may mga katanungan, mangyaring makipag-ugnayan sa customer service."
                 },
                 "query_failed": {
                     "zh": "活动查询失败，已为您转接人工客服。",
-                    "en": "Activity query failed. You have been transferred to customer service."
+                    "en": "Activity query failed. You have been transferred to customer service.",
+                    "th": "การสอบถามกิจกรรมล้มเหลว คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "Nabigo ang activity query. Na-transfer na kayo sa customer service."
                 },
                 "unclear_activity": {
                     "zh": "我为您找到了以下活动，请明确您想查询的具体活动：",
-                    "en": "I found the following activities for you. Please specify which activity you want to inquire about:"
+                    "en": "I found the following activities for you. Please specify which activity you want to inquire about:",
+                    "th": "ฉันพบกิจกรรมต่อไปนี้สำหรับคุณ กรุณาระบุกิจกรรมเฉพาะที่คุณต้องการสอบถาม:",
+                    "tl": "Nahanap ko ang mga sumusunod na aktibidad para sa inyo. Mangyaring tukuyin kung aling aktibidad ang gusto ninyong itanong:"
                 },
                 "still_unclear": {
                     "zh": "抱歉，仍然无法确定您要查询的具体活动，已为您转接人工客服。",
-                    "en": "Sorry, I still cannot determine the specific activity you want to inquire about. You have been transferred to customer service."
+                    "en": "Sorry, I still cannot determine the specific activity you want to inquire about. You have been transferred to customer service.",
+                    "th": "ขออภัย ฉันยังไม่สามารถระบุกิจกรรมเฉพาะที่คุณต้องการสอบถามได้ คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "Pasensya na, hindi ko pa rin matukoy ang specific na aktibidad na gusto ninyong itanong. Na-transfer na kayo sa customer service."
+                },
+                "session_invalid": {
+                    "zh": "会话已失效，请重新登录后再试。",
+                    "en": "Session has expired. Please login again and try.",
+                    "th": "เซสชันหมดอายุแล้ว กรุณาเข้าสู่ระบบใหม่และลองอีกครั้ง",
+                    "tl": "Nag-expire na ang session. Mangyaring mag-login ulit at subukan."
                 }
             }
         }
@@ -377,15 +464,35 @@ def load_business_config() -> Dict:
             with open(BUSINESS_CONFIG_PATH, 'w', encoding='utf-8') as f:
                 json.dump(default_config, f, ensure_ascii=False, indent=4)
             
+            if logger:
+                logger.info(f"默认配置文件创建成功", extra={
+                    'config_path': BUSINESS_CONFIG_PATH,
+                    'business_types_count': len(default_config.get('business_types', {}))
+                })
+            
             _business_config_cache = default_config
         else:
             # 读取配置文件
             with open(BUSINESS_CONFIG_PATH, 'r', encoding='utf-8') as f:
                 _business_config_cache = json.load(f)
+            
+            if logger:
+                logger.info(f"业务配置文件加载成功", extra={
+                    'config_path': BUSINESS_CONFIG_PATH,
+                    'business_types_count': len(_business_config_cache.get('business_types', {})),
+                    'config_size': len(str(_business_config_cache))
+                })
         
         return _business_config_cache
     except Exception as e:
-        print(f"加载业务配置文件失败: {str(e)}")
+        error_msg = f"加载业务配置文件失败: {str(e)}"
+        if logger:
+            logger.error(error_msg, extra={
+                'config_path': BUSINESS_CONFIG_PATH,
+                'error_type': type(e).__name__
+            }, exc_info=True)
+        else:
+            print(error_msg)
         # 返回空配置
         return {}
 
@@ -397,6 +504,16 @@ def reload_config() -> Dict:
         Dict: 更新后的业务配置字典
     """
     global _business_config_cache
+    
+    try:
+        logger = get_logger("chatai-config")
+        logger.info(f"强制重新加载配置", extra={
+            'operation': 'reload_config',
+            'had_cache': _business_config_cache is not None
+        })
+    except:
+        pass
+    
     _business_config_cache = None
     return load_business_config()
 

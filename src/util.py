@@ -1,8 +1,11 @@
 # 定义请求模型
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Dict, List, Any, Optional
 import httpx
+import time
 from .config import get_config
+from .logging_config import get_logger, log_api_call
+from .auth import verify_token
 
 class MessageRequest(BaseModel):
     session_id: str
@@ -16,13 +19,35 @@ class MessageRequest(BaseModel):
     images: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
     site: int = 1
-    transfer_human: int = 0
+    token: Optional[str] = Field(default=None, description="用户认证token")
     
-    @validator('status')
+    @field_validator('status')
+    @classmethod
     def validate_status(cls, v):
         if v not in [0, 1]:
             raise ValueError("status必须是0（未登录）或1（已登录）")
         return v
+    
+    def validate_token(self) -> tuple[bool, Optional[str]]:
+        """
+        验证token的有效性
+        
+        Returns:
+            tuple[bool, Optional[str]]: (是否有效, 错误信息)
+        """
+        if not self.token:
+            return False, "缺少认证token"
+        
+        is_valid, token_user_id, error_msg = verify_token(self.token)
+        
+        if not is_valid:
+            return False, error_msg
+        
+        # 验证token中的user_id与请求中的user_id是否一致
+        if token_user_id != self.user_id:
+            return False, f"Token中的用户ID({token_user_id})与请求中的用户ID({self.user_id})不匹配"
+        
+        return True, None
 
 class MessageResponse(BaseModel):
     session_id: str
@@ -55,16 +80,63 @@ async def call_backend_service(
     :param timeout: 超时时间
     :return: 返回响应的json数据
     """
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.request(
-            method=method,
-            url=url,
-            params=params,
-            json=json_data,
-            headers=headers,
-        )
-        response.raise_for_status()  # 请求失败会抛异常
-        return response.json()
+    logger = get_logger("chatai-api")
+    start_time = time.time()
+    
+    logger.debug(f"准备调用后端服务", extra={
+        'url': url,
+        'method': method,
+        'has_params': bool(params),
+        'has_json_data': bool(json_data),
+        'timeout': timeout
+    })
+    
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.request(
+                method=method,
+                url=url,
+                params=params,
+                json=json_data,
+                headers=headers,
+            )
+            
+            call_time = time.time() - start_time
+            
+            response.raise_for_status()  # 请求失败会抛异常
+            response_data = response.json()
+            
+            logger.info(f"后端服务调用成功", extra={
+                'url': url,
+                'method': method,
+                'status_code': response.status_code,
+                'response_time': round(call_time, 3),
+                'response_size': len(str(response_data))
+            })
+            
+            return response_data
+            
+    except httpx.HTTPStatusError as e:
+        call_time = time.time() - start_time
+        logger.error(f"后端服务HTTP错误", extra={
+            'url': url,
+            'method': method,
+            'status_code': e.response.status_code,
+            'error': str(e),
+            'response_time': round(call_time, 3)
+        }, exc_info=True)
+        raise
+        
+    except Exception as e:
+        call_time = time.time() - start_time
+        logger.error(f"后端服务调用异常", extra={
+            'url': url,
+            'method': method,
+            'error': str(e),
+            'error_type': type(e).__name__,
+            'response_time': round(call_time, 3)
+        }, exc_info=True)
+        raise
 
 # 调用 OpenAPI 大模型接口的方法示例（基于OpenAI通用API，需根据实际API调整）
 async def call_openapi_model(
@@ -85,8 +157,20 @@ async def call_openapi_model(
     :param api_url: API请求地址，如果为None则从配置文件读取
     :return: 模型回复文本
     """
+    logger = get_logger("chatai-api")
+    start_time = time.time()
+    
     # 从配置文件读取默认值
     config = get_config()
+    
+    logger.debug(f"开始调用OpenAI模型", extra={
+        'prompt_length': len(prompt),
+        'prompt_preview': prompt[:200] + '...' if len(prompt) > 200 else prompt,
+        'has_custom_api_key': api_key is not None,
+        'custom_model': model,
+        'custom_temperature': temperature,
+        'custom_max_tokens': max_tokens
+    })
     
     # 如果参数为None，则从配置文件中获取
     if api_key is None:
@@ -102,8 +186,24 @@ async def call_openapi_model(
     if max_tokens is None:
         max_tokens = openai_config.get("default_max_tokens", 1024)
     
+    logger.debug(f"使用配置参数", extra={
+        'final_api_url': api_url,
+        'final_model': model,
+        'final_temperature': temperature,
+        'final_max_tokens': max_tokens,
+        'api_key_length': len(api_key) if api_key else 0
+    })
+    
     # 检查是否是测试模式（API密钥包含'test'）
     if "test" in api_key.lower():
+        call_time = time.time() - start_time
+        
+        logger.info(f"使用测试模式响应", extra={
+            'test_mode': True,
+            'prompt_keywords': [word for word in ['订单', '充值', '提现', '帮助', '谢谢'] if word in prompt],
+            'response_time': round(call_time, 3)
+        })
+        
         # 返回模拟响应
         if "订单" in prompt:
             return "我已经收到您的请求，正在为您查询订单状态。请稍等片刻。"
@@ -128,10 +228,58 @@ async def call_openapi_model(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(api_url, headers=headers, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        # 解析回复文本（根据OpenAI API结构）
-        return data["choices"][0]["message"]["content"]
+    
+    log_api_call("openai_chat_completion", "system", model=model, prompt_length=len(prompt))
+    
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(api_url, headers=headers, json=payload)
+            
+            call_time = time.time() - start_time
+            
+            resp.raise_for_status()
+            data = resp.json()
+            
+            # 解析回复文本（根据OpenAI API结构）
+            response_content = data["choices"][0]["message"]["content"]
+            
+            logger.info(f"OpenAI模型调用成功", extra={
+                'model': model,
+                'prompt_length': len(prompt),
+                'response_length': len(response_content),
+                'response_time': round(call_time, 3),
+                'usage_tokens': data.get('usage', {}).get('total_tokens', 0),
+                'status_code': resp.status_code
+            })
+            
+            return response_content
+            
+    except httpx.HTTPStatusError as e:
+        call_time = time.time() - start_time
+        logger.error(f"OpenAI模型HTTP错误", extra={
+            'model': model,
+            'status_code': e.response.status_code,
+            'error': str(e),
+            'response_time': round(call_time, 3),
+            'api_url': api_url
+        }, exc_info=True)
+        
+        # 对于特定错误返回友好的回复
+        if e.response.status_code == 401:
+            return "抱歉，AI服务暂时不可用，请稍后再试。"
+        elif e.response.status_code == 429:
+            return "当前请求过多，请稍后再试。"
+        else:
+            return "抱歉，遇到了一些技术问题，请稍后再试。"
+            
+    except Exception as e:
+        call_time = time.time() - start_time
+        logger.error(f"OpenAI模型调用异常", extra={
+            'model': model,
+            'error': str(e),
+            'error_type': type(e).__name__,
+            'response_time': round(call_time, 3),
+            'api_url': api_url
+        }, exc_info=True)
+        
+        return "抱歉，AI服务暂时不可用，请稍后再试。"

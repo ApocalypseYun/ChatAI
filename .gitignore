@@ -1,11 +1,36 @@
-__pycache__/app.cpython-312.pyc
-src/__pycache__/__init__.cpython-312.pyc
-src/__pycache__/config.cpython-312.pyc
-src/__pycache__/process.cpython-312.pyc
-src/__pycache__/reply.cpython-312.pyc
-src/__pycache__/util.cpython-312.pyc
-src/__pycache__/workflow_check.cpython-312.pyc
-src/__pycache__/request_internal.cpython-312.pyc
-src/__pycache__/telegram.cpython-312.pyc
-__pycache__/comprehensive_test.cpython-312.pyc
-AI_Train.pem
+# Python缓存文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# 日志文件
+logs/
+*.log
+*.log.*
+
+# 配置文件中的敏感信息
+config/secrets.json
+.env
+
+# IDE文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# 密钥文件
+*.pem
+*.key
+*.crt
+
+# 临时文件
+tmp/
+temp/
+*.tmp

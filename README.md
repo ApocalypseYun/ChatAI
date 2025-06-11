@@ -25,9 +25,11 @@ ChatAI是一个基于FastAPI的智能客服系统，专为在线平台的充值�
 
 ### 系统集成
 - **OpenAI模型集成**：智能回复生成
+- **Token认证机制**：基于HMAC-SHA256的用户身份验证
 - **Telegram群推送**：异常状态实时通知
 - **内部API调用**：充值、提现、活动接口集成
 - **配置热重载**：支持运行时配置更新
+- **完整日志系统**：多级别日志分离、自动轮转、JSON格式、性能监控
 
 ## 🚀 快速开始
 
@@ -63,6 +65,16 @@ ChatAI是一个基于FastAPI的智能客服系统，专为在线平台的充值�
    访问 http://127.0.0.1:8000/health 检查服务状态
    
    或访问 http://127.0.0.1:8000/docs 查看API文档
+
+5. **测试日志功能**
+   
+   ```bash
+   # 测试日志系统
+   python test_logging.py
+   
+   # 查看日志文件
+   python manage_logs.py stats
+   ```
 
 ## 📚 API 文档
 
@@ -118,6 +130,7 @@ Content-Type: application/json
 | images | array | ❌ | 图片URL列表 |
 | metadata | object | ❌ | 元数据信息 |
 | site | integer | ❌ | 站点标识 |
+| token | string | ❌ | 认证token (已登录用户必填) |
 | transfer_human | integer | ❌ | 转人工标识 |
 
 **请求示例：**
@@ -135,6 +148,7 @@ Content-Type: application/json
     { "role": "AI", "content": "您好，有什么可以帮助您的吗？" }
   ],
   "images": ["https://example.com/image.jpg"],
+  "token": "u1001.1749634097.25b6fbdac6de3b5fd5157591196740340fd470cfed59495a8412155ae0bfba5a",
   "metadata": {
     "is_call": 1,
     "calls": [
@@ -497,11 +511,178 @@ save                   # 保存对话记录到文件
 
 ## 📊 监控与运维
 
-### 日志系统
-系统使用Python标准logging模块，支持：
-- **请求日志**：记录所有API调用
-- **错误日志**：异常情况详细记录
-- **业务日志**：关键业务节点跟踪
+### 📋 日志系统
+
+ChatAI 集成了强大的本地日志保存功能，为开发调试和生产监控提供全面的日志支持。
+
+#### 🚀 日志功能特性
+
+1. **多级别日志分离** - 支持按日志级别分别保存
+2. **文件自动轮转** - 当日志文件达到指定大小时自动切分
+3. **JSON格式输出** - 结构化的日志格式，便于分析和处理
+4. **自动清理** - 自动删除过期的日志文件
+5. **API调用追踪** - 专门的API调用日志，便于调试
+6. **访问日志记录** - 记录所有API请求的详细信息
+
+#### 📁 日志文件类型
+
+日志系统会在 `logs/` 目录下创建以下类型的日志文件：
+
+- **`chatai_all.log`** - 完整的应用日志，包含所有级别的日志
+- **`chatai_error.log`** - 仅包含ERROR及以上级别的日志
+- **`chatai_access.log`** - API访问和请求日志
+- **`chatai_api.log`** - 外部API调用日志，用于调试和监控
+
+#### 🔄 日志轮转机制
+
+当日志文件大小超过10MB时，系统会自动创建新的日志文件，旧文件会被重命名为：
+- `chatai_all.log.1`
+- `chatai_all.log.2`
+- 等等...
+
+最多保留10个备份文件，超过30天的日志会被自动清理。
+
+#### ⚙️ 日志配置
+
+**主配置文件** (`config/logging_config.json`)：
+```json
+{
+    "log_dir": "logs",                    // 日志目录
+    "level": "INFO",                      // 默认日志级别
+    "console_output": true,               // 是否在控制台输出
+    "file_output": true,                  // 是否输出到文件
+    "json_format": true,                  // 是否使用JSON格式
+    "max_file_size": "10MB",             // 最大文件大小
+    "backup_count": 10,                   // 备份文件数量
+    "retention_days": 30,                 // 日志保留天数
+    "separate_error_log": true            // 是否分离错误日志
+}
+```
+
+**业务配置** (`config/business_config.json`)：
+```json
+{
+    "logging": {
+        "enabled": true,                  // 是否启用日志
+        "config_file": "config/logging_config.json",
+        "log_level": "INFO",
+        "log_api_calls": true,            // 是否记录API调用
+        "log_user_messages": false,       // 是否记录用户消息
+        "log_sensitive_data": false,      // 是否记录敏感数据
+        "performance_monitoring": true    // 是否启用性能监控
+    }
+}
+```
+
+#### 🛠️ 日志管理工具
+
+项目提供了 `manage_logs.py` 脚本来管理日志文件：
+
+```bash
+# 查看帮助
+python manage_logs.py --help
+
+# 列出所有日志文件
+python manage_logs.py list
+
+# 显示日志统计信息
+python manage_logs.py stats
+
+# 清理30天前的日志文件（预览模式）
+python manage_logs.py cleanup --days 30 --dry-run
+
+# 实际清理30天前的日志文件
+python manage_logs.py cleanup --days 30
+
+# 查看最后50行全量日志
+python manage_logs.py tail --type all --lines 50
+
+# 查看最后100行错误日志
+python manage_logs.py tail --type error --lines 100
+```
+
+**命令说明：**
+- **`list`** - 列出所有日志文件及其大小、修改时间
+- **`stats`** - 显示详细的日志统计信息，包括文件数量、总大小、按类型分组等
+- **`cleanup`** - 清理过期的日志文件
+- **`tail`** - 查看日志文件的尾部内容
+
+#### 📊 日志格式说明
+
+**JSON格式日志**（文件保存）：
+```json
+{
+    "timestamp": "2024-01-01T12:00:00.000000",
+    "level": "INFO",
+    "logger": "chatai-api",
+    "message": "处理会话 session123 的消息",
+    "module": "process",
+    "function": "process_message",
+    "line": 54,
+    "thread_id": 12345,
+    "process_id": 6789,
+    "session_id": "session123",
+    "user_id": "user456"
+}
+```
+
+**控制台格式日志**：
+```
+2024-01-01 12:00:00,000 - chatai-api - INFO - 处理会话 session123 的消息
+```
+
+#### 🔍 日志分析
+
+可以使用以下工具分析JSON格式的日志：
+
+```bash
+# 统计错误数量
+grep '"level": "ERROR"' logs/chatai_all.log | wc -l
+
+# 查找特定会话的日志
+grep '"session_id": "session123"' logs/chatai_all.log
+
+# 使用jq工具分析JSON日志
+cat logs/chatai_all.log | jq '.timestamp, .message'
+```
+
+#### ⚡ 性能监控
+
+日志系统集成了性能监控功能：
+
+1. **请求处理时间** - 记录每个API请求的处理时间
+2. **API调用统计** - 统计外部API调用的频率和响应时间
+3. **内存使用情况** - 监控应用的内存使用
+4. **错误率统计** - 自动统计错误发生率
+
+#### 🔧 测试日志功能
+
+可以使用测试脚本验证日志功能：
+
+```bash
+# 运行日志功能测试
+python test_logging.py
+```
+
+该脚本会测试各种日志级别、请求记录、API调用记录等功能，并检查日志文件是否正确创建。
+
+#### 🛡️ 最佳实践
+
+**生产环境建议：**
+1. **日志级别设置为INFO** - 平衡详细程度和性能
+2. **启用日志轮转** - 防止单个日志文件过大
+3. **定期清理日志** - 设置合适的保留天数
+4. **监控日志大小** - 定期检查日志目录的磁盘使用
+
+**开发环境建议：**
+1. **日志级别设置为DEBUG** - 获取更详细的调试信息
+2. **关闭JSON格式** - 提高可读性
+3. **启用API调用日志** - 便于调试外部API问题
+
+**安全注意事项：**
+1. **不要记录敏感信息** - 如密码、令牌等
+2. **定期备份重要日志** - 用于审计和问题追踪
+3. **限制日志文件访问权限** - 确保只有授权人员可以访问
 
 ### 配置管理
 - **热重载**：支持运行时配置更新
@@ -580,6 +761,60 @@ curl http://localhost:8000/health
 - 📋 提交 [Issue](../../issues)
 - 💬 发起 [Discussion](../../discussions)
 - 📧 发送邮件至项目维护者
+
+## 🔐 Token认证机制
+
+ChatAI系统实现了基于HMAC-SHA256的token认证机制，确保已登录用户的请求安全性。
+
+### 快速使用
+
+#### 1. 生成Token
+```bash
+# 为用户生成token
+python generate_token.py user123
+
+# 输出示例：
+# Token: user123.1749634097.25b6fbdac6de3b5fd5157591196740340fd470cfed59495a8412155ae0bfba5a
+```
+
+#### 2. 验证Token  
+```bash
+# 验证token有效性
+python generate_token.py user123 verify user123.1749634097.25b6fbdac6de3b5fd5157591196740340fd470cfed59495a8412155ae0bfba5a
+```
+
+#### 3. API调用示例
+```json
+{
+  "session_id": "session123",
+  "user_id": "user123", 
+  "platform": "web",
+  "language": "zh",
+  "status": 1,
+  "messages": "我想查询充值状态",
+  "token": "user123.1749634097.25b6fbdac6de3b5fd5157591196740340fd470cfed59495a8412155ae0bfba5a"
+}
+```
+
+### 认证规则
+
+- **未登录用户** (`status=0`)：无需提供token
+- **已登录用户** (`status=1`)：必须提供有效token，否则请求会被拒绝
+- **Token有效期**：默认1小时，可在配置文件中调整
+- **安全机制**：使用HMAC-SHA256签名，防止伪造和篡改
+
+### 错误处理
+
+常见认证错误：
+```json
+{
+  "error": "Token验证失败: Token已过期"
+}
+```
+
+### 详细文档
+
+完整的token认证机制说明请参考：[TOKEN_AUTH_README.md](TOKEN_AUTH_README.md)
 
 ---
 

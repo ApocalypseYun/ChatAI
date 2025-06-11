@@ -36,18 +36,19 @@ def encrypt_payload(data: dict, key: str = AES_KEY, iv: str = AES_IV) -> str:
 # print(encrypted_data)
 
 # A001 充值 - 查询用户支付状态
-async def query_recharge_status(session_id: str, order_no: str) -> Dict[str, Any]:
+async def query_recharge_status(session_id: str, order_no: str, site: int = 1) -> Dict[str, Any]:
     """
     查询用户支付状态
     参数：
         session_id: 会话ID
         order_no: 订单编号
+        site: 站点ID，默认为1
     返回：
         接口响应 JSON
     """
     url = internal_endpoint   #TODO 更新为接口path
     payload = {
-        "site": 1,
+        "site": site,
         "session_id": session_id,
         "code": "A001",
         "params": {
@@ -60,18 +61,19 @@ async def query_recharge_status(session_id: str, order_no: str) -> Dict[str, Any
 
 
 # A002 提现 - 查询用户提现状态
-async def query_withdrawal_status(session_id: str, order_no: str) -> Dict[str, Any]:
+async def query_withdrawal_status(session_id: str, order_no: str, site: int = 1) -> Dict[str, Any]:
     """
     查询用户提现状态
     参数：
         session_id: 会话ID
         order_no: 订单编号
+        site: 站点ID，默认为1
     返回：
         接口响应 JSON
     """
     url = internal_endpoint  #TODO 更新为接口path
     payload = {
-        "site": 1,
+        "site": site,
         "session_id": session_id,
         "code": "A002",
         "params": {
@@ -84,17 +86,18 @@ async def query_withdrawal_status(session_id: str, order_no: str) -> Dict[str, A
 
 
 # A003 活动 - 查询活动列表
-async def query_activity_list(session_id: str,) -> Dict[str, Any]:
+async def query_activity_list(session_id: str, site: int = 1) -> Dict[str, Any]:
     """
     查询活动列表
     参数：
         session_id: 会话ID
+        site: 站点ID，默认为1
     返回：
         接口响应 JSON，包括Agent、Deposit、Rebate等活动列表
     """
     url = internal_endpoint   #TODO 更新为接口path
     payload = {
-        "site": 1,
+        "site": site,
         "session_id": session_id,
         "code": "A003",
         "params": {}
@@ -105,17 +108,18 @@ async def query_activity_list(session_id: str,) -> Dict[str, Any]:
 
 
 # A004 活动 - 查询用户条件是否满足领取需求
-async def query_user_eligibility(session_id: str,) -> Dict[str, Any]:
+async def query_user_eligibility(session_id: str, site: int = 1) -> Dict[str, Any]:
     """
     查询用户条件是否满足领取需求
     参数：
         session_id: 会话ID
+        site: 站点ID，默认为1
     返回：
         接口响应 JSON
     """
     url = internal_endpoint  #TODO 更新为接口path
     payload = {
-        "site": 1,
+        "site": site,
         "session_id": session_id,
         "code": "A004",
         "params": {}
@@ -192,6 +196,9 @@ def extract_activity_list(response: Dict[str, Any]) -> Dict[str, Any]:
             "agent_activities": activity_list.get("Agent", []),
             "deposit_activities": activity_list.get("Deposit", []),
             "rebate_activities": activity_list.get("Rebate", []),
+            "lucky_spin_activities": activity_list.get("Lucky Spin", []),
+            "all_member_activities": activity_list.get("All member", []),
+            "sports_activities": activity_list.get("Sports", []),
             "total_activities": sum(len(v) for v in activity_list.values()),
             "is_success": response.get("state", -1) == 0,
             "message": response.get("message", "")
@@ -201,6 +208,9 @@ def extract_activity_list(response: Dict[str, Any]) -> Dict[str, Any]:
             "agent_activities": [],
             "deposit_activities": [],
             "rebate_activities": [],
+            "lucky_spin_activities": [],
+            "all_member_activities": [],
+            "sports_activities": [],
             "total_activities": 0,
             "is_success": False,
             "message": f"数据提取失败: {str(e)}"

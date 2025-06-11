@@ -1,0 +1,78 @@
+{
+    "log_dir": "logs",
+    "level": "INFO",
+    "console_output": true,
+    "file_output": true,
+    "json_format": true,
+    "max_file_size": "10MB",
+    "backup_count": 10,
+    "retention_days": 30,
+    "separate_error_log": true,
+    "loggers": {
+        "chatai-api": {
+            "level": "INFO",
+            "handlers": ["console", "file_all", "file_error"],
+            "description": "主要业务逻辑日志"
+        },
+        "chatai-access": {
+            "level": "INFO",
+            "handlers": ["file_access"],
+            "description": "API访问请求日志"
+        },
+        "chatai-api-calls": {
+            "level": "INFO",
+            "handlers": ["file_api"],
+            "description": "外部API调用日志"
+        },
+        "uvicorn.access": {
+            "level": "INFO",
+            "handlers": ["file_access"],
+            "description": "Web服务器访问日志"
+        },
+        "uvicorn.error": {
+            "level": "ERROR", 
+            "handlers": ["console", "file_error"],
+            "description": "Web服务器错误日志"
+        }
+    },
+    "log_files": {
+        "all": {
+            "description": "完整的应用日志，包含所有级别的日志",
+            "pattern": "chatai_all.log"
+        },
+        "error": {
+            "description": "仅包含ERROR及以上级别的日志",
+            "pattern": "chatai_error.log"
+        },
+        "access": {
+            "description": "API访问和请求日志",
+            "pattern": "chatai_access.log"
+        },
+        "api": {
+            "description": "外部API调用日志，用于调试和监控",
+            "pattern": "chatai_api.log"
+        }
+    },
+    "cleanup": {
+        "enabled": true,
+        "retention_days": 30,
+        "cleanup_on_startup": true,
+        "schedule": "daily"
+    },
+    "monitoring": {
+        "enable_metrics": true,
+        "log_performance": true,
+        "track_memory_usage": true
+    },
+    "security": {
+        "mask_sensitive_data": true,
+        "sensitive_fields": ["password", "token", "secret", "key"],
+        "max_log_length": 1000
+    },
+    "development": {
+        "debug_mode": false,
+        "enable_sql_logging": false,
+        "log_request_body": false,
+        "log_response_body": false
+    }
+} 
