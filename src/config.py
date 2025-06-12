@@ -135,10 +135,16 @@ def load_business_config() -> Dict:
                     "tl": "Hindi mahanap ang status ng recharge. Na-transfer na kayo sa customer service."
                 },
                 "order_not_found": {
-                    "zh": "未能识别到您的订单号，请明确提供您的订单号。",
-                    "en": "Could not identify your order number. Please provide your order number clearly.",
-                    "th": "ไม่สามารถระบุหมายเลขคำสั่งซื้อของคุณได้ กรุณาระบุหมายเลขคำสั่งซื้อของคุณอย่างชัดเจน",
-                    "tl": "Hindi makita ang inyong order number. Mangyaring magbigay ng malinaw na order number."
+                    "zh": "请提供正确的18位订单号。您可以在交易记录中查看完整的订单号。",
+                    "en": "Please provide the correct 18-digit order number. You can view the complete order number in your transaction history.",
+                    "th": "กรุณาระบุหมายเลขคำสั่งซื้อ 18 หลักที่ถูกต้อง คุณสามารถดูหมายเลขคำสั่งซื้อที่สมบูรณ์ในประวัติการทำธุรกรรมของคุณ",
+                    "tl": "Mangyaring magbigay ng tamang 18-digit na order number. Maaari ninyong tingnan ang kumpletong order number sa inyong transaction history."
+                },
+                "invalid_order_number": {
+                    "zh": "您提供的订单号格式不正确或不存在。请检查后重新输入正确的18位数字订单号。",
+                    "en": "The order number you provided is incorrect or does not exist. Please check and re-enter the correct 18-digit order number.",
+                    "th": "หมายเลขคำสั่งซื้อที่คุณระบุไม่ถูกต้องหรือไม่มีอยู่ กรุณาตรวจสอบและป้อนหมายเลขคำสั่งซื้อ 18 หลักที่ถูกต้องอีกครั้ง",
+                    "tl": "Ang order number na inyong binigay ay hindi tama o hindi umiiral. Mangyaring suriin at muling ilagay ang tamang 18-digit na order number."
                 },
                 "image_uploaded": {
                     "zh": "您上传了图片，已为您转接人工客服。",
@@ -246,10 +252,16 @@ def load_business_config() -> Dict:
                     "tl": "Hindi mahanap ang status ng withdrawal. Na-transfer na kayo sa customer service."
                 },
                 "order_not_found": {
-                    "zh": "未能识别到您的订单号，请明确提供您的订单号。",
-                    "en": "Could not identify your order number. Please provide your order number clearly.",
-                    "th": "ไม่สามารถระบุหมายเลขคำสั่งซื้อของคุณได้ กรุณาระบุหมายเลขคำสั่งซื้อของคุณอย่างชัดเจน",
-                    "tl": "Hindi makita ang inyong order number. Mangyaring magbigay ng malinaw na order number."
+                    "zh": "请提供正确的18位订单号。您可以在交易记录中查看完整的订单号。",
+                    "en": "Please provide the correct 18-digit order number. You can view the complete order number in your transaction history.",
+                    "th": "กรุณาระบุหมายเลขคำสั่งซื้อ 18 หลักที่ถูกต้อง คุณสามารถดูหมายเลขคำสั่งซื้อที่สมบูรณ์ในประวัติการทำธุรกรรมของคุณ",
+                    "tl": "Mangyaring magbigay ng tamang 18-digit na order number. Maaari ninyong tingnan ang kumpletong order number sa inyong transaction history."
+                },
+                "invalid_order_number": {
+                    "zh": "您提供的订单号格式不正确或不存在。请检查后重新输入正确的18位数字订单号。",
+                    "en": "The order number you provided is incorrect or does not exist. Please check and re-enter the correct 18-digit order number.",
+                    "th": "หมายเลขคำสั่งซื้อที่คุณระบุไม่ถูกต้องหรือไม่มีอยู่ กรุณาตรวจสอบและป้อนหมายเลขคำสั่งซื้อ 18 หลักที่ถูกต้องอีกครั้ง",
+                    "tl": "Ang order number na inyong binigay ay hindi tama o hindi umiiral. Mangyaring suriin at muling ilagay ang tamang 18-digit na order number."
                 },
                 "image_uploaded": {
                     "zh": "您上传了图片，已为您转接人工客服。",

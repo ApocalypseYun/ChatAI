@@ -24,6 +24,9 @@ class JSONFormatter(logging.Formatter):
     
     def format(self, record):
         """格式化日志记录为JSON格式"""
+        # 创建日志记录的副本，避免修改原始记录
+        record_dict = record.__dict__.copy()
+        
         log_entry = {
             'timestamp': datetime.fromtimestamp(record.created).isoformat(),
             'level': record.levelname,
@@ -40,13 +43,11 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info:
             log_entry['exception'] = self.formatException(record.exc_info)
         
-        # 添加额外的字段
-        if hasattr(record, 'session_id'):
-            log_entry['session_id'] = record.session_id
-        if hasattr(record, 'user_id'):
-            log_entry['user_id'] = record.user_id
-        if hasattr(record, 'request_id'):
-            log_entry['request_id'] = record.request_id
+        # 添加额外的字段（避免覆盖基础字段）
+        extra_fields = ['session_id', 'user_id', 'request_id', 'api_name', 'order_no', 'activity', 'error_type']
+        for field in extra_fields:
+            if hasattr(record, field) and field not in log_entry:
+                log_entry[field] = getattr(record, field)
         
         return json.dumps(log_entry, ensure_ascii=False)
 

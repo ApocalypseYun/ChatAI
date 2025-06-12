@@ -55,7 +55,7 @@ class MessageResponse(BaseModel):
     response: str
     stage: str = "working"
     metadata: Dict[str, Any] = {}
-    images: Optional[List[str]] = None
+    images: str = None
     site: int = 1
     type: Optional[str] = None
     transfer_human: int = 0
