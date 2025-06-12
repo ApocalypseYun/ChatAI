@@ -129,7 +129,7 @@ async def process_message(request: MessageRequest) -> MessageResponse:
         )
     else:  # 已登录
         logger.debug(f"用户已登录，开始业务处理", extra={'session_id': request.session_id})
-        message_type = request.type or "unknown"
+        message_type = request.type
         
         # 如果type为None，进行意图识别
         if message_type is None:
@@ -156,12 +156,24 @@ async def process_message(request: MessageRequest) -> MessageResponse:
                 'preset_type': message_type
             })
 
-        if message_type == "human_service":
-            logger.info(f"用户请求人工客服", extra={
-                'session_id': request.session_id,
-                'transfer_reason': 'user_request'
-            })
-            response_text = "您需要人工客服的帮助，请稍等。"
+        # 检查是否识别到了有效的业务类型
+        if message_type == "human_service" or message_type not in ["S001", "S002", "S003"]:
+            if message_type == "human_service":
+                transfer_reason = 'user_request_or_ai_fallback'
+                logger.info(f"意图识别为人工客服", extra={
+                    'session_id': request.session_id,
+                    'transfer_reason': transfer_reason
+                })
+                response_text = "您需要人工客服的帮助，请稍等。"
+            else:
+                transfer_reason = 'unrecognized_intent'
+                logger.warning(f"未识别到有效业务类型，转人工处理", extra={
+                    'session_id': request.session_id,
+                    'unrecognized_type': message_type,
+                    'transfer_reason': transfer_reason
+                })
+                response_text = "抱歉，我无法理解您的问题，已为您转接人工客服。"
+            
             response_stage = "working"
             transfer_human = 1
             

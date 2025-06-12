@@ -34,3 +34,4 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+test_simple_intent.py
