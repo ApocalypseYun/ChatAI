@@ -39,10 +39,10 @@ class ResponseStage(Enum):
 
 class ProcessingResult:
     """处理结果的数据类"""
-    def __init__(self, text: str = "", image: str = "", stage: str = ResponseStage.WORKING.value, 
+    def __init__(self, text: str = "", images: List[str] = None, stage: str = ResponseStage.WORKING.value, 
                  transfer_human: int = 0, message_type: str = ""):
         self.text = text
-        self.image = image
+        self.images = images or []
         self.stage = stage
         self.transfer_human = transfer_human
         self.message_type = message_type
@@ -358,7 +358,7 @@ def _build_response(request: MessageRequest, result: ProcessingResult, start_tim
         'session_id': request.session_id,
         'response_stage': result.stage,
         'transfer_human': result.transfer_human,
-        'has_images': bool(result.image),
+        'has_images': bool(result.images),
         'response_length': len(result.text),
         'conversation_rounds': conversation_rounds
     })
@@ -368,7 +368,7 @@ def _build_response(request: MessageRequest, result: ProcessingResult, start_tim
         status="success",
         response=result.text,
         stage=result.stage,
-        images=result.image,
+        images=result.images,
         metadata={
             "intent": result.message_type,
             "timestamp": time.time(),
@@ -387,7 +387,7 @@ class StageHandler:
     """阶段处理器基类"""
     
     @staticmethod
-    async def handle_image_upload(request: MessageRequest, status_messages: Dict) -> ProcessingResult:
+    async def handle_image_upload(request: MessageRequest, status_messages: Dict, message_type: str) -> ProcessingResult:
         """处理图片上传情况"""
         logger.warning(f"检测到图片上传，转人工处理", extra={
             'session_id': request.session_id,
@@ -403,11 +403,12 @@ class StageHandler:
         return ProcessingResult(
             text=response_text,
             transfer_human=1,
-            stage=ResponseStage.FINISH.value
+            stage=ResponseStage.FINISH.value,
+            message_type=message_type
         )
     
     @staticmethod
-    async def handle_standard_stage(request: MessageRequest, stage_number: str, workflow: Dict) -> ProcessingResult:
+    async def handle_standard_stage(request: MessageRequest, stage_number: str, workflow: Dict, message_type: str) -> ProcessingResult:
         """处理标准阶段（1、2、4）"""
         step_info = workflow.get(stage_number, {})
         stage_response = step_info.get("response", {})
@@ -416,13 +417,14 @@ class StageHandler:
         prompt = build_reply_with_prompt(request.history or [], request.messages, stage_text, request.language)
         response_text = await call_openapi_model(prompt=prompt)
         
-        stage_image = stage_response.get("image", "")
+        stage_images = stage_response.get("images", [])
         response_stage = ResponseStage.WORKING.value if stage_number in ["1", "2"] else ResponseStage.FINISH.value
         
         return ProcessingResult(
             text=response_text,
-            image=stage_image,
-            stage=response_stage
+            images=stage_images,
+            stage=response_stage,
+            message_type=message_type
         )
     
     @staticmethod
@@ -444,7 +446,8 @@ class StageHandler:
             )
             return ProcessingResult(
                 text=response_text,
-                stage=ResponseStage.WORKING.value
+                stage=ResponseStage.WORKING.value,
+                message_type=business_type
             )
 
 
@@ -453,17 +456,22 @@ async def _handle_s001_process(request: MessageRequest, stage_number: int, workf
     """处理S001充值查询流程"""
     # 检查图片上传
     if request.images and len(request.images) > 0:
-        return await StageHandler.handle_image_upload(request, status_messages)
+        return await StageHandler.handle_image_upload(request, status_messages, BusinessType.RECHARGE_QUERY.value)
     
     # 标准阶段处理
     if str(stage_number) in ["1", "2", "4"]:
-        return await StageHandler.handle_standard_stage(request, str(stage_number), workflow)
+        return await StageHandler.handle_standard_stage(request, str(stage_number), workflow, BusinessType.RECHARGE_QUERY.value)
     
     # 阶段3：订单号查询处理
     elif str(stage_number) == "3":
         return await _handle_order_query_s001(request, status_messages, workflow)
     
-    return ProcessingResult(text="未知阶段", transfer_human=1, stage=ResponseStage.FINISH.value)
+    return ProcessingResult(
+        text="未知阶段", 
+        transfer_human=1, 
+        stage=ResponseStage.FINISH.value,
+        message_type=BusinessType.RECHARGE_QUERY.value
+    )
 
 
 async def _handle_order_query_s001(request: MessageRequest, status_messages: Dict, workflow: Dict) -> ProcessingResult:
@@ -543,10 +551,10 @@ async def _process_recharge_status(status: str, status_messages: Dict, workflow:
     )
     
     # 添加成功状态的图片
-    response_image = ""
+    response_images = []
     if status == "Recharge successful":
         stage_4_info = workflow.get("4", {})
-        response_image = stage_4_info.get("response", {}).get("image", "")
+        response_images = stage_4_info.get("response", {}).get("images", [])
     
     # 生成最终回复
     prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
@@ -554,7 +562,7 @@ async def _process_recharge_status(status: str, status_messages: Dict, workflow:
     
     return ProcessingResult(
         text=final_text,
-        image=response_image,
+        images=response_images,
         stage=stage,
         transfer_human=transfer_human
     )
@@ -565,17 +573,22 @@ async def _handle_s002_process(request: MessageRequest, stage_number: int, workf
     """处理S002提现查询流程"""
     # 检查图片上传
     if request.images and len(request.images) > 0:
-        return await StageHandler.handle_image_upload(request, status_messages)
+        return await StageHandler.handle_image_upload(request, status_messages, BusinessType.WITHDRAWAL_QUERY.value)
     
     # 标准阶段处理
     if str(stage_number) in ["1", "2", "4"]:
-        return await StageHandler.handle_standard_stage(request, str(stage_number), workflow)
+        return await StageHandler.handle_standard_stage(request, str(stage_number), workflow, BusinessType.WITHDRAWAL_QUERY.value)
     
     # 阶段3：订单号查询处理
     elif str(stage_number) == "3":
         return await _handle_order_query_s002(request, status_messages, workflow, config)
     
-    return ProcessingResult(text="未知阶段", transfer_human=1, stage=ResponseStage.FINISH.value)
+    return ProcessingResult(
+        text="未知阶段", 
+        transfer_human=1, 
+        stage=ResponseStage.FINISH.value,
+        message_type=BusinessType.WITHDRAWAL_QUERY.value
+    )
 
 
 async def _handle_order_query_s002(request: MessageRequest, status_messages: Dict, 
@@ -667,10 +680,10 @@ async def _process_withdrawal_status(status: str, status_messages: Dict, workflo
     )
     
     # 添加成功状态的图片
-    response_image = ""
+    response_images = []
     if status == "Withdrawal successful":
         stage_4_info = workflow.get("4", {})
-        response_image = stage_4_info.get("response", {}).get("image", "")
+        response_images = stage_4_info.get("response", {}).get("images", [])
     
     # 生成最终回复
     prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
@@ -678,7 +691,7 @@ async def _process_withdrawal_status(status: str, status_messages: Dict, workflo
     
     return ProcessingResult(
         text=final_text,
-        image=response_image,
+        images=response_images,
         stage=stage,
         transfer_human=transfer_human
     )

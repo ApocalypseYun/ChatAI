@@ -84,14 +84,14 @@ def load_business_config() -> Dict:
                     "response": {
                         "text": "您需要查询的【订单编号】是多少？"
                     },
-                    "image": ""
+                    "images": []
                 },
                 "2": {
                     "step": "不知道【订单编号】",
                     "response": {
                         "text": "按照下面图片的指引进行操作"
                     },
-                    "image": "https://img.lodirnd.com/lodi/depositOrder.webp"
+                    "images": ["https://img.lodirnd.com/lodi/depositOrder.webp"]
                 },
                 "3": {
                     "step": "提供【订单编号】"
@@ -100,7 +100,8 @@ def load_business_config() -> Dict:
                     "step": "已完成",
                     "response": {
                         "text": "还有什么需要帮助的吗？如果没有，非常感谢本次来信。"
-                    }
+                    },
+                    "images": []
                 }
             },
             "status_messages": {
@@ -195,14 +196,14 @@ def load_business_config() -> Dict:
                     "response": {
                         "text": "您需要查询的【订单编号】是多少？"
                     },
-                    "image": ""
+                    "images": []
                 },
                 "2": {
                     "step": "不知道【订单编号】",
                     "response": {
                         "text": "按照下面图片的指引进行操作"
                     },
-                    "image": "https://img.lodirnd.com/lodi/withdrawalOrder.webp"
+                    "images": ["https://img.lodirnd.com/lodi/withdrawalOrder.webp"]
                 },
                 "3": {
                     "step": "提供【订单编号】"
@@ -211,7 +212,8 @@ def load_business_config() -> Dict:
                     "step": "已完成",
                     "response": {
                         "text": "还有什么需要帮助的吗？如果没有，非常感谢本次来信。"
-                    }
+                    },
+                    "images": []
                 }
             },
             "status_messages": {

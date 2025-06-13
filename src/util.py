@@ -55,7 +55,7 @@ class MessageResponse(BaseModel):
     response: str
     stage: str = "working"
     metadata: Dict[str, Any] = {}
-    images: str = None
+    images: List[str] = Field(default_factory=list)
     site: int = 1
     type: Optional[str] = None
     transfer_human: int = 0
