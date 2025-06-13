@@ -40,7 +40,7 @@ class ResponseStage(Enum):
 class ProcessingResult:
     """处理结果的数据类"""
     def __init__(self, text: str = "", image: str = "", stage: str = ResponseStage.WORKING.value, 
-                 transfer_human: int = 0, message_type: str = None):
+                 transfer_human: int = 0, message_type: str = ""):
         self.text = text
         self.image = image
         self.stage = stage
@@ -190,7 +190,7 @@ def _handle_max_rounds_exceeded(request: MessageRequest) -> ProcessingResult:
 
 async def _get_or_identify_business_type(request: MessageRequest) -> str:
     """获取或识别业务类型"""
-    if request.type is not None:
+    if request.type is not None and request.type != "":
         logger.debug(f"使用预设业务类型: {request.type}", extra={
             'session_id': request.session_id,
             'preset_type': request.type
