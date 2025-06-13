@@ -40,7 +40,7 @@ class ResponseStage(Enum):
 class ProcessingResult:
     """处理结果的数据类"""
     def __init__(self, text: str = "", image: str = "", stage: str = ResponseStage.WORKING.value, 
-                 transfer_human: int = 0, message_type: str = "unknown"):
+                 transfer_human: int = 0, message_type: str = None):
         self.text = text
         self.image = image
         self.stage = stage
@@ -184,7 +184,7 @@ def _handle_max_rounds_exceeded(request: MessageRequest) -> ProcessingResult:
         text=response_text,
         stage=ResponseStage.FINISH.value,
         transfer_human=1,
-        message_type=request.type or "unknown"
+        message_type=request.type
     )
 
 
