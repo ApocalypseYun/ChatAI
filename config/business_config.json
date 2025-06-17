@@ -111,10 +111,10 @@
                     "tl": "Nag-expire na ang session. Mangyaring mag-login ulit at subukan."
                 },
                 "invalid_order_number": {
-                    "zh": "您提供的订单号格式正确，但查询不到相关信息，请检查订单号是否正确，或联系客服核实。",
-                    "en": "The order number format is correct, but no related information found. Please check if the order number is correct or contact customer service.",
-                    "th": "รูปแบบหมายเลขคำสั่งซื้อถูกต้อง แต่ไม่พบข้อมูลที่เกี่ยวข้อง กรุณาตรวจสอบว่าหมายเลขคำสั่งซื้อถูกต้องหรือติดต่อฝ่ายบริการลูกค้า",
-                    "tl": "Tama ang format ng order number, pero walang nahanap na related information. Mangyaring i-check kung tama ang order number o makipag-ugnayan sa customer service."
+                    "zh": "订单号错误，系统中查询不到此订单信息，请提供正确的18位订单号。",
+                    "en": "Incorrect order number, no order information found in the system. Please provide the correct 18-digit order number.",
+                    "th": "หมายเลขคำสั่งซื้อไม่ถูกต้อง ไม่พบข้อมูลคำสั่งซื้อในระบบ กรุณาระบุหมายเลขคำสั่งซื้อ 18 หลักที่ถูกต้อง",
+                    "tl": "Mali ang order number, walang nahanap na order information sa system. Mangyaring magbigay ng tamang 18-digit na order number."
                 },
                 "non_business_inquiry": {
                     "zh": "您的问题不在充值查询范围内，已为您转接人工客服。",
@@ -240,10 +240,10 @@
                     "tl": "Nag-expire na ang session. Mangyaring mag-login ulit at subukan."
                 },
                 "invalid_order_number": {
-                    "zh": "您提供的订单号格式正确，但查询不到相关信息，请检查订单号是否正确，或联系客服核实。",
-                    "en": "The order number format is correct, but no related information found. Please check if the order number is correct or contact customer service.",
-                    "th": "รูปแบบหมายเลขคำสั่งซื้อถูกต้อง แต่ไม่พบข้อมูลที่เกี่ยวข้อง กรุณาตรวจสอบว่าหมายเลขคำสั่งซื้อถูกต้องหรือติดต่อฝ่ายบริการลูกค้า",
-                    "tl": "Tama ang format ng order number, pero walang nahanap na related information. Mangyaring i-check kung tama ang order number o makipag-ugnayan sa customer service."
+                    "zh": "订单号错误，系统中查询不到此订单信息，请提供正确的18位订单号。",
+                    "en": "Incorrect order number, no order information found in the system. Please provide the correct 18-digit order number.",
+                    "th": "หมายเลขคำสั่งซื้อไม่ถูกต้อง ไม่พบข้อมูลคำสั่งซื้อในระบบ กรุณาระบุหมายเลขคำสั่งซื้อ 18 หลักที่ถูกต้อง",
+                    "tl": "Mali ang order number, walang nahanap na order information sa system. Mangyaring magbigay ng tamang 18-digit na order number."
                 },
                 "non_business_inquiry": {
                     "zh": "您的问题不在提现查询范围内，已为您转接人工客服。",
@@ -371,6 +371,12 @@
                     "en": "Activity query failed. You have been transferred to customer service.",
                     "th": "การสอบถามกิจกรรมล้มเหลว คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
                     "tl": "Nabigo ang activity query. Na-transfer na kayo sa customer service."
+                },
+                "activity_not_found": {
+                    "zh": "查询不到您所说的活动信息，请提供正确的活动名称或描述。",
+                    "en": "Cannot find the activity information you mentioned. Please provide the correct activity name or description.",
+                    "th": "ไม่สามารถค้นหาข้อมูลกิจกรรมที่คุณกล่าวถึงได้ กรุณาระบุชื่อกิจกรรมหรือคำอธิบายที่ถูกต้อง",
+                    "tl": "Hindi mahanap ang activity information na inyong binanggit. Mangyaring magbigay ng tamang activity name o description."
                 },
                 "unclear_activity": {
                     "zh": "我为您找到了以下活动，请明确您想查询的具体活动：",

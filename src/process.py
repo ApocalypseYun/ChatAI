@@ -7,9 +7,9 @@ from enum import Enum
 # 导入配置和其他模块
 from src.config import get_config, get_message_by_language
 # 假设这些函数在其他模块中定义
-from src.workflow_check import identify_intent, identify_stage
-from src.reply import get_unauthenticated_reply, build_reply_with_prompt, build_guidance_prompt
-from src.util import MessageRequest, MessageResponse, call_openapi_model  # 异步方法
+from src.workflow_check import identify_intent, identify_stage, is_follow_up_satisfaction_check
+from src.reply import get_unauthenticated_reply, build_reply_with_prompt, build_guidance_prompt, get_follow_up_message
+from src.util import MessageRequest, MessageResponse, call_openapi_model, identify_user_satisfaction  # 异步方法
 from src.telegram import send_to_telegram
 from src.request_internal import (
     query_recharge_status, query_withdrawal_status, query_activity_list, query_user_eligibility,
@@ -36,6 +36,8 @@ class ResponseStage(Enum):
     WORKING = "working"
     FINISH = "finish"
     UNAUTHENTICATED = "unauthenticated"
+
+
 
 class ProcessingResult:
     """处理结果的数据类"""
@@ -155,6 +157,27 @@ async def _process_authenticated_user(request: MessageRequest) -> ProcessingResu
     if conversation_rounds >= Constants.MAX_CONVERSATION_ROUNDS:
         return _handle_max_rounds_exceeded(request)
     
+    # 检查是否为后续询问的回复（用户表示满意或没有其他问题）
+    if is_follow_up_satisfaction_check(request):
+        user_satisfied = await identify_user_satisfaction(str(request.messages), request.language)
+        if user_satisfied:
+            logger.info(f"用户表示满意，结束对话", extra={
+                'session_id': request.session_id,
+                'conversation_rounds': conversation_rounds
+            })
+            return ProcessingResult(
+                text=get_message_by_language({
+                    "zh": "感谢您的使用，祝您生活愉快！",
+                    "en": "Thank you for using our service. Have a great day!",
+                    "th": "ขอบคุณที่ใช้บริการของเรา ขอให้มีความสุข!",
+                    "tl": "Salamat sa paggamit ng aming serbisyo. Magkaroon ng magandang araw!",
+                    "ja": "ご利用ありがとうございました。良い一日をお過ごしください！"
+                }, request.language),
+                stage=ResponseStage.FINISH.value,
+                transfer_human=0,
+                message_type=request.type or ""
+            )
+    
     # 获取或识别业务类型
     message_type = await _get_or_identify_business_type(request)
     
@@ -164,6 +187,17 @@ async def _process_authenticated_user(request: MessageRequest) -> ProcessingResu
     
     # 处理具体业务
     return await _handle_business_process(request, message_type)
+
+
+def _add_follow_up_to_result(result: ProcessingResult, language: str) -> ProcessingResult:
+    """
+    为结果添加后续询问，将finish状态改为working
+    """
+    if result.stage == ResponseStage.FINISH.value and result.transfer_human == 0:
+        follow_up_message = get_follow_up_message(language)
+        result.text = f"{result.text}\n{follow_up_message}"
+        result.stage = ResponseStage.WORKING.value
+    return result
 
 
 def _handle_max_rounds_exceeded(request: MessageRequest) -> ProcessingResult:
@@ -206,7 +240,8 @@ async def _get_or_identify_business_type(request: MessageRequest) -> str:
     message_type = await identify_intent(
         request.messages, 
         request.history or [], 
-        request.language
+        request.language,
+        request.category
     )
     
     logger.info(f"意图识别完成: {message_type}", extra={
@@ -291,12 +326,15 @@ async def _handle_business_process(request: MessageRequest, message_type: str) -
         return await _handle_s003_process(request, stage_number, status_messages, config)
     
     # 默认情况
-    return ProcessingResult(
+    result = ProcessingResult(
         text="抱歉，无法处理您的请求。",
         transfer_human=1,
         stage=ResponseStage.FINISH.value,
         message_type=message_type
     )
+    
+    # 为非转人工的结果添加后续询问
+    return _add_follow_up_to_result(result, request.language)
 
 
 async def _handle_stage_zero(request: MessageRequest, message_type: str, status_messages: Dict) -> ProcessingResult:
@@ -420,12 +458,15 @@ class StageHandler:
         stage_images = stage_response.get("images", [])
         response_stage = ResponseStage.WORKING.value if stage_number in ["1", "2"] else ResponseStage.FINISH.value
         
-        return ProcessingResult(
+        result = ProcessingResult(
             text=response_text,
             images=stage_images,
             stage=response_stage,
             message_type=message_type
         )
+        
+        # 为非转人工的结果添加后续询问
+        return _add_follow_up_to_result(result, request.language)
     
     @staticmethod
     def handle_order_not_found(request: MessageRequest, status_messages: Dict, business_type: str) -> ProcessingResult:
@@ -505,25 +546,41 @@ async def _handle_order_query_s001(request: MessageRequest, status_messages: Dic
         api_result = None
     
     # 验证API结果
-    is_valid, error_message = validate_session_and_handle_errors(api_result, status_messages, request.language)
+    is_valid, error_message, error_type = validate_session_and_handle_errors(api_result, status_messages, request.language)
     if not is_valid:
-        return ProcessingResult(
-            text=error_message,
-            transfer_human=1,
-            stage=ResponseStage.FINISH.value
-        )
+        if error_type == "user_input":
+            # state=886: 订单号不对，不转人工
+            response_text = get_message_by_language(
+                status_messages.get("invalid_order_number", {}), 
+                request.language
+            )
+            return ProcessingResult(
+                text=response_text,
+                transfer_human=0,
+                stage=ResponseStage.WORKING.value,
+                message_type=BusinessType.RECHARGE_QUERY.value
+            )
+        else:
+            # 系统错误，转人工
+            return ProcessingResult(
+                text=error_message,
+                transfer_human=1,
+                stage=ResponseStage.FINISH.value
+            )
     
     # 处理查询结果
     extracted_data = extract_recharge_status(api_result)
     if not extracted_data["is_success"]:
+        # A001接口能调通但查询失败，说明订单号不对，不转人工
         response_text = get_message_by_language(
-            status_messages.get("query_failed", {}), 
+            status_messages.get("invalid_order_number", {}), 
             request.language
         )
         return ProcessingResult(
             text=response_text,
-            transfer_human=1,
-            stage=ResponseStage.FINISH.value
+            transfer_human=0,
+            stage=ResponseStage.WORKING.value,
+            message_type=BusinessType.RECHARGE_QUERY.value
         )
     
     # 根据状态处理
@@ -560,12 +617,15 @@ async def _process_recharge_status(status: str, status_messages: Dict, workflow:
     prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
     final_text = await call_openapi_model(prompt=prompt)
     
-    return ProcessingResult(
+    result = ProcessingResult(
         text=final_text,
         images=response_images,
         stage=stage,
         transfer_human=transfer_human
     )
+    
+    # 为非转人工的结果添加后续询问
+    return _add_follow_up_to_result(result, request.language)
 
 
 async def _handle_s002_process(request: MessageRequest, stage_number: int, workflow: Dict, 
@@ -623,25 +683,41 @@ async def _handle_order_query_s002(request: MessageRequest, status_messages: Dic
         api_result = None
     
     # 验证API结果
-    is_valid, error_message = validate_session_and_handle_errors(api_result, status_messages, request.language)
+    is_valid, error_message, error_type = validate_session_and_handle_errors(api_result, status_messages, request.language)
     if not is_valid:
-        return ProcessingResult(
-            text=error_message,
-            transfer_human=1,
-            stage=ResponseStage.FINISH.value
-        )
+        if error_type == "user_input":
+            # state=886: 订单号不对，不转人工
+            response_text = get_message_by_language(
+                status_messages.get("invalid_order_number", {}), 
+                request.language
+            )
+            return ProcessingResult(
+                text=response_text,
+                transfer_human=0,
+                stage=ResponseStage.WORKING.value,
+                message_type=BusinessType.WITHDRAWAL_QUERY.value
+            )
+        else:
+            # 系统错误，转人工
+            return ProcessingResult(
+                text=error_message,
+                transfer_human=1,
+                stage=ResponseStage.FINISH.value
+            )
     
     # 处理查询结果
     extracted_data = extract_withdrawal_status(api_result)
     if not extracted_data["is_success"]:
+        # A002接口能调通但查询失败，说明订单号不对，不转人工
         response_text = get_message_by_language(
-            status_messages.get("query_failed", {}), 
+            status_messages.get("invalid_order_number", {}), 
             request.language
         )
         return ProcessingResult(
             text=response_text,
-            transfer_human=1,
-            stage=ResponseStage.FINISH.value
+            transfer_human=0,
+            stage=ResponseStage.WORKING.value,
+            message_type=BusinessType.WITHDRAWAL_QUERY.value
         )
     
     # 根据状态处理
@@ -689,12 +765,15 @@ async def _process_withdrawal_status(status: str, status_messages: Dict, workflo
     prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
     final_text = await call_openapi_model(prompt=prompt)
     
-    return ProcessingResult(
+    result = ProcessingResult(
         text=final_text,
         images=response_images,
         stage=stage,
         transfer_human=transfer_human
     )
+    
+    # 为非转人工的结果添加后续询问
+    return _add_follow_up_to_result(result, request.language)
 
 
 async def _send_telegram_notification(config: Dict, request: MessageRequest, order_no: str, status: str) -> None:
@@ -744,14 +823,24 @@ async def _handle_activity_query(request: MessageRequest, status_messages: Dict)
         }, exc_info=True)
         api_result = None
     
-    is_valid, error_message = validate_session_and_handle_errors(api_result, status_messages, request.language)
+    is_valid, error_message, error_type = validate_session_and_handle_errors(api_result, status_messages, request.language)
     if not is_valid:
-        prompt = build_reply_with_prompt(request.history or [], request.messages, error_message, request.language)
+        if error_type == "user_input":
+            # state=886: 活动信息提供不正确，不转人工
+            response_text = get_message_by_language(
+                status_messages.get("activity_not_found", {}), 
+                request.language
+            )
+        else:
+            # 系统错误，转人工
+            response_text = error_message
+            
+        prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
         final_text = await call_openapi_model(prompt=prompt)
         return ProcessingResult(
             text=final_text,
-            transfer_human=1,
-            stage=ResponseStage.FINISH.value
+            transfer_human=1 if error_type == "system" else 0,
+            stage=ResponseStage.FINISH.value if error_type == "system" else ResponseStage.WORKING.value
         )
     
     extracted_data = extract_activity_list(api_result)
@@ -784,10 +873,12 @@ async def _handle_activity_query(request: MessageRequest, status_messages: Dict)
         )
         prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
         final_text = await call_openapi_model(prompt=prompt)
-        return ProcessingResult(
+        result = ProcessingResult(
             text=final_text,
             stage=ResponseStage.FINISH.value
         )
+        # 为非转人工的结果添加后续询问
+        return _add_follow_up_to_result(result, request.language)
     
     # 识别用户想要的活动
     return await _identify_and_query_activity(request, all_activities, status_messages)
@@ -804,7 +895,47 @@ async def _identify_and_query_activity(request: MessageRequest, all_activities: 
     
     # 处理识别结果
     if identified_activity.strip().lower() == "unclear" or identified_activity.strip() not in all_activities:
-        return await _handle_unclear_activity(request, status_messages, activity_list_text)
+        # 基于category提供更精准的错误处理
+        if request.category:
+            category_value = list(request.category.values())[0] if request.category else None
+            
+            # 如果是特殊的不需要活动识别的情况，直接返回错误
+            special_cases = [
+                "Check agent commission", 
+                "Check rebate bonus", 
+                "Check spin promotion", 
+                "Check VIP salary"
+            ]
+            
+            if category_value in special_cases:
+                # 这些情况应该由意图识别阶段处理，不应该到达这里
+                response_text = get_message_by_language(
+                    status_messages.get("activity_not_found", {}), 
+                    request.language
+                )
+                return ProcessingResult(
+                    text=response_text,
+                    stage=ResponseStage.WORKING.value,
+                    transfer_human=0,
+                    message_type=BusinessType.ACTIVITY_QUERY.value
+                )
+        
+        # 检查是否用户提供了具体的活动名称但找不到
+        user_message = request.messages.strip()
+        if len(user_message) > 10:  # 用户提供了较长的描述，可能是具体活动名称
+            # 返回活动找不到的错误，让用户提供正确信息
+            response_text = get_message_by_language(
+                status_messages.get("activity_not_found", {}), 
+                request.language
+            )
+            return ProcessingResult(
+                text=response_text,
+                stage=ResponseStage.WORKING.value,
+                transfer_human=0,
+                message_type=BusinessType.ACTIVITY_QUERY.value
+            )
+        else:
+            return await _handle_unclear_activity(request, status_messages, activity_list_text)
     
     # 查询用户资格
     return await _query_user_activity_eligibility(request, identified_activity.strip(), status_messages)
@@ -827,6 +958,7 @@ async def _identify_user_activity(request: MessageRequest, activity_list_text: s
     """识别用户想要的活动"""
     user_message = request.messages
     
+    # 构建基础prompt
     if request.language == "en":
         activity_prompt = f"""
 Based on the user's message and activity list, identify the specific activity the user wants to query.
@@ -834,7 +966,25 @@ Based on the user's message and activity list, identify the specific activity th
 User message: {user_message}
 
 {activity_list_text}
+"""
+        
+        # 添加category信息作为活动识别的参考
+        if request.category:
+            activity_prompt += f"""
+User intent category reference: {request.category}
 
+Activity type guidance based on category:
+- If category shows "Agent" → Focus on agent-related activities (代理/Agent commission, referral, etc.)
+- If category shows "Rebate" → Focus on rebate-related activities (返水/Rebate bonus, cashback, etc.)  
+- If category shows "Lucky Spin" → Focus on lucky spin/wheel activities (幸运转盘/Lucky draw, etc.)
+- If category shows "All member" → Focus on VIP/member activities (VIP salary, member bonus, etc.)
+- If category shows "Deposit" activities → Focus on deposit bonus activities
+- If category shows "Sports" → Focus on sports betting activities
+
+Note: Use the category as a reference to narrow down the activity type, but still match based on the actual user message content.
+"""
+        
+        activity_prompt += """
 Please analyze the user's message and find the most matching activity name from the activity list.
 If the user's description is not clear enough or cannot match a specific activity, please reply "unclear".
 If you find a matching activity, please return the complete activity name directly.
@@ -846,7 +996,25 @@ If you find a matching activity, please return the complete activity name direct
 用户消息：{user_message}
 
 {activity_list_text}
+"""
+        
+        # 添加category信息作为活动识别的参考
+        if request.category:
+            activity_prompt += f"""
+用户意图分类参考：{request.category}
 
+基于category的活动类型指导：
+- 如果category显示"Agent" → 重点关注代理相关活动（代理佣金、代理推荐等）
+- 如果category显示"Rebate" → 重点关注返水相关活动（返水奖金、现金返还等）
+- 如果category显示"Lucky Spin" → 重点关注幸运转盘类活动（幸运抽奖、转盘等）
+- 如果category显示"All member" → 重点关注VIP/会员活动（VIP工资、会员奖金等）
+- 如果category显示"Deposit"相关 → 重点关注充值奖励活动
+- 如果category显示"Sports" → 重点关注体育投注活动
+
+注意：category仅作为参考来缩小活动类型范围，仍需基于用户的实际消息内容进行匹配。
+"""
+        
+        activity_prompt += """
 请分析用户的消息，从活动列表中找出最匹配的活动名称。
 如果用户的描述不够明确或无法匹配到具体活动，请回复"unclear"。
 如果找到匹配的活动，请直接返回活动的完整名称。
@@ -898,14 +1066,16 @@ async def _query_user_activity_eligibility(request: MessageRequest, activity_nam
         eligibility_data = extract_user_eligibility(api_result)
         
         if not eligibility_data["is_success"]:
+            # A004接口能调通但查询失败，说明活动信息不对，不转人工
             response_text = get_message_by_language(
-                status_messages.get("query_failed", {}), 
+                status_messages.get("activity_not_found", {}), 
                 request.language
             )
             return ProcessingResult(
                 text=response_text,
-                transfer_human=1,
-                stage=ResponseStage.FINISH.value
+                transfer_human=0,
+                stage=ResponseStage.WORKING.value,
+                message_type=BusinessType.ACTIVITY_QUERY.value
             )
         
         # 处理资格状态
@@ -962,11 +1132,14 @@ async def _process_activity_eligibility(eligibility_data: Dict, status_messages:
     prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
     final_text = await call_openapi_model(prompt=prompt)
     
-    return ProcessingResult(
+    result = ProcessingResult(
         text=final_text,
         stage=stage,
         transfer_human=transfer_human
     )
+    
+    # 为非转人工的结果添加后续询问
+    return _add_follow_up_to_result(result, request.language)
 
 
 def extract_order_no(messages, history):
@@ -1010,30 +1183,24 @@ def extract_order_no(messages, history):
 def validate_session_and_handle_errors(api_result, status_messages, language):
     """
     验证session_id和处理API调用错误
+    返回: (是否成功, 错误消息, 错误类型)
+    错误类型: "user_input" - 用户输入问题, "system" - 系统问题
     """
     if not api_result:
         return False, get_message_by_language(
             status_messages.get("query_failed", {}), 
             language
-        )
+        ), "system"
     
-    # 检查是否是session_id无效或其他错误
+    # 检查API调用状态
     state = api_result.get("state", -1)
     
-    error_mapping = {
-        886: "session_invalid",        # Missing required parameters
-        887: "invalid_order_number",   # 订单号格式正确但查询不到记录
-    }
-    
-    if state in error_mapping:
-        return False, get_message_by_language(
-            status_messages.get(error_mapping[state], {}), 
-            language
-        )
-    elif state != 0:  # 其他错误
+    if state == 886:  # Missing required parameters - 用户输入问题
+        return False, "", "user_input"
+    elif state != 0:  # 其他错误 - 系统问题
         return False, get_message_by_language(
             status_messages.get("query_failed", {}), 
             language
-        )
+        ), "system"
     
-    return True, "" 
+    return True, "", None 

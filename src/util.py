@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Dict, List, Any, Optional
 import httpx
 import time
-from .config import get_config
+from .config import get_config, get_message_by_language
 from .logging_config import get_logger, log_api_call
 from .auth import verify_token
 
@@ -20,6 +20,7 @@ class MessageRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
     site: int = 1
     token: Optional[str] = Field(default=None, description="用户认证token")
+    category: Optional[Dict[str, str]] = Field(default=None, description="用户意图分类，用于辅助意图识别")
     
     @field_validator('status')
     @classmethod
@@ -283,3 +284,70 @@ async def call_openapi_model(
         }, exc_info=True)
         
         return "抱歉，AI服务暂时不可用，请稍后再试。"
+
+async def identify_user_satisfaction(messages: str, language: str) -> bool:
+    """
+    识别用户是否表示没有其他问题/满意当前服务
+    
+    Args:
+        messages: 用户消息
+        language: 语言
+        
+    Returns:
+        bool: True表示用户满意/没有其他问题，False表示还有问题或不确定
+    """
+    logger = get_logger("chatai-api")
+    
+    # 构建识别提示
+    if language == "en":
+        prompt = f"""
+You are a satisfaction detection assistant. Based on the user's message, determine if the user indicates they have no more questions or are satisfied with the service.
+
+User message: {messages}
+
+Common expressions that indicate satisfaction or no more questions:
+- "No more questions"
+- "That's all"
+- "Thank you"
+- "Nothing else"
+- "I'm good"
+- "All set"
+- "No problem"
+- "Okay"
+- "Thanks"
+
+Please respond with only "YES" if the user indicates they have no more questions or are satisfied.
+Please respond with only "NO" if the user has more questions or the intent is unclear.
+"""
+    else:
+        prompt = f"""
+你是一个满意度识别助手。根据用户的消息，判断用户是否表示没有其他问题或对服务满意。
+
+用户消息：{messages}
+
+常见的表示满意或没有其他问题的表达：
+- "没有了"
+- "没问题"
+- "好的"
+- "谢谢"
+- "没有其他问题"
+- "就这样"
+- "可以了"
+- "行"
+- "OK"
+- "谢了"
+
+如果用户表示没有其他问题或满意，请只回复"YES"。
+如果用户还有问题或意图不明确，请只回复"NO"。
+"""
+    
+    try:
+        response = await call_openapi_model(prompt=prompt)
+        return response.strip().upper() == "YES"
+    except Exception as e:
+        logger.error(f"用户满意度识别失败", extra={
+            'error': str(e),
+            'message': messages[:100]
+        })
+        # 默认返回False，保持对话继续
+        return False

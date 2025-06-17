@@ -2,6 +2,8 @@
 回复模块
 """
 
+from .config import get_message_by_language
+
 def get_unauthenticated_reply(language: str) -> str:
     """
     获取未登录的回复
@@ -17,6 +19,25 @@ def get_unauthenticated_reply(language: str) -> str:
         return "ログインしていません。まずログインしてください。"
     else:
         return "You are not logged in, please log in first"
+
+def get_follow_up_message(language: str) -> str:
+    """
+    获取后续询问消息
+    
+    Args:
+        language: 语言
+        
+    Returns:
+        str: 后续询问消息
+    """
+    messages = {
+        "zh": "请问还有什么可以帮您？",
+        "en": "Is there anything else I can help you with?",
+        "th": "มีอะไรอื่นที่ฉันสามารถช่วยคุณได้อีกไหม?",
+        "tl": "May iba pa bang maitutulong ko sa inyo?",
+        "ja": "他に何かお手伝いできることはありますか？"
+    }
+    return get_message_by_language(messages, language)
 
 def build_reply_with_prompt(history, current_messages, stage_response_text, language):
     """

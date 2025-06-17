@@ -20,6 +20,8 @@ ChatAI是一个基于FastAPI的智能客服系统，专为在线平台的充值�
 ### 智能特性
 - **多语言支持**：中文、英文、日文、泰文、他加禄语
 - **意图自动识别**：基于关键词和AI模型的双重识别机制
+- **Category参数增强**：基于用户意图分类提供精准的业务流程识别
+- **智能错误处理**：区分用户输入错误和系统错误，优化用户体验
 - **阶段智能跟踪**：多轮对话状态管理
 - **图片智能处理**：自动检测图片上传并转人工客服
 
@@ -132,6 +134,7 @@ Content-Type: application/json
 | site | integer | ❌ | 站点标识 |
 | token | string | ❌ | 认证token (已登录用户必填) |
 | transfer_human | integer | ❌ | 转人工标识 |
+| category | object | ❌ | 用户意图分类信息 (新增) |
 
 **请求示例：**
 ```json
@@ -159,7 +162,10 @@ Content-Type: application/json
     ]
   },
   "site": 1,
-  "transfer_human": 0
+  "transfer_human": 0,
+  "category": {
+    "Withdrawal": "Withdrawal not received"
+  }
 }
 ```
 
@@ -270,6 +276,161 @@ if request.images and len(request.images) > 0:
 - **提现图片**：用户ID + 图片链接  
 - **异常状态**：用户ID + 订单号 + 状态信息
 
+## 🎯 Category 参数增强意图识别
+
+### 概述
+Category 参数是 ChatAI 系统的重要增强功能，通过用户意图分类信息来提供更精准的业务流程识别和活动匹配。
+
+### 参数格式
+```json
+{
+  "category": {
+    "主分类": "子分类"
+  }
+}
+```
+
+### 支持的分类体系
+
+#### 🔸 Withdrawal (提现相关)
+- **Withdrawal not received** - 提现未到账 (AI直接处理)
+- **Withdrawal Options** - 提现方式
+- **Withdrawal Problem** - 提现问题  
+- **Withdrawal Prohibited** - 提现限制
+- **Others** - 其他提现问题
+
+#### 🔸 Deposit (充值相关)  
+- **Deposit not received** - 充值未到账 (AI直接处理)
+- **Followup Deposit** - 后续充值
+- **Payment Options** - 支付方式
+- **Payment Problem** - 支付问题
+- **Others** - 其他充值问题
+
+#### 🔸 Promotion Bonus (活动奖励)
+- **Agent** - 代理相关 (Check agent commission: AI直接处理)
+- **Rebate** - 返水相关 (Check rebate bonus: AI直接处理)  
+- **Lucky Spin** - 幸运转盘 (Check spin promotion: AI直接处理)
+- **All member** - 会员活动 (Check VIP salary: AI直接处理)
+
+#### 🔸 Account (账户相关)
+- **How to Register** - 如何注册
+- **OTP Problem** - 验证码问题
+- **Forgot username/Password** - 忘记用户名/密码
+- **KYC** - 身份验证
+- **Add/Delete Bank** - 银行卡管理
+- **Scam report** - 诈骗举报
+- **Report Login Issue** - 登录问题举报
+- **Others** - 其他账户问题
+
+#### 🔸 Affiliate Agent (代理相关)
+- **Agent commission** - 代理佣金
+- **Agent referral** - 代理推荐
+- **Agent bonus** - 代理奖金
+- **How to become an agent** - 如何成为代理
+- **Contact Affiliate Team** - 联系代理团队
+- **PPA Official Link** - PPA官方链接
+- **Others** - 其他代理问题
+
+### 智能路由规则
+
+#### 📍 业务流程映射
+```json
+{
+  "Withdrawal": "S002",      // 提现查询流程
+  "Deposit": "S001",         // 充值查询流程  
+  "Promotion Bonus": "S003", // 活动查询流程
+  "Account": "human_service", // 转人工客服
+  "Affiliate Agent": "human_service" // 转人工客服
+}
+```
+
+#### 📍 特殊处理场景
+**AI直接处理的子分类**（不进入业务流程）：
+- `"Withdrawal not received"`
+- `"Deposit not received"`  
+- `"Check agent commission"`
+- `"Check rebate bonus"`
+- `"Check spin promotion"`
+- `"Check VIP salary"`
+
+### 活动识别增强
+
+当业务类型为 S003（活动查询）时，Category 参数会为活动识别提供精准指导：
+
+#### 🎯 活动类型指导
+```javascript
+// 基于 category 的活动匹配指导
+if (category.value === "Agent") {
+  // 重点关注代理相关活动（代理佣金、代理推荐等）
+} else if (category.value === "Rebate") {
+  // 重点关注返水相关活动（返水奖金、现金返还等）
+} else if (category.value === "Lucky Spin") {
+  // 重点关注幸运转盘类活动（幸运抽奖、转盘等）
+} else if (category.value === "All member") {
+  // 重点关注VIP/会员活动（VIP工资、会员奖金等）
+}
+```
+
+#### 💡 使用效果
+- **精准定位**：从100+活动中快速定位到用户关心的活动类型
+- **减少歧义**：当用户描述模糊时提供额外上下文  
+- **提高成功率**：即使活动列表很长也能快速匹配
+- **多语言支持**：中英文环境下都能提供准确指导
+
+### 使用示例
+
+#### 示例1：提现未到账（AI直接处理）
+```json
+{
+  "messages": "我的提现还没有到账",
+  "category": {
+    "Withdrawal": "Withdrawal not received"
+  }
+}
+```
+**处理结果**：AI直接提供通用的提现到账说明，不进入S002流程
+
+#### 示例2：充值订单查询（进入S001流程）  
+```json
+{
+  "messages": "我的充值订单有问题",
+  "category": {
+    "Deposit": "Payment Problem"  
+  }
+}
+```
+**处理结果**：识别为S001充值查询，询问用户订单号
+
+#### 示例3：代理活动查询（精准活动识别）
+```json
+{
+  "messages": "有什么代理奖励活动",
+  "category": {
+    "Promotion Bonus": "Agent"
+  }
+}
+```
+**处理结果**：进入S003流程，重点关注代理相关活动进行匹配
+
+#### 示例4：账户问题（转人工客服）
+```json
+{
+  "messages": "我忘记了登录密码",
+  "category": {
+    "Account": "Forgot username/Password"
+  }
+}
+```
+**处理结果**：直接转人工客服处理
+
+### 技术实现优势
+
+- **🚀 提升识别准确性**：通过分类信息辅助意图识别
+- **⚡ 优化用户体验**：避免不必要的业务流程跳转
+- **🎯 精准活动匹配**：在众多活动中快速定位目标活动
+- **🔧 智能边界处理**：识别并处理特殊的查询类场景
+- **🌍 多语言一致性**：确保各语言环境下的处理逻辑一致
+
 ## 🔢 订单号识别算法
 
 ### 精确识别逻辑
@@ -314,18 +475,108 @@ def extract_order_no(messages, history):
 }
 ```
 
-## 🚨 错误处理
+## 🚨 智能错误处理
+
+### 错误分类机制
+
+ChatAI 系统实现了智能的错误分类机制，能够区分用户输入错误和系统错误，提供差异化的处理策略。
+
+#### 🔸 错误类型分类
+
+**用户输入错误 (User Input Error)**
+- 订单号错误 (18位数字不存在)
+- 活动信息错误 (活动不存在或信息不匹配)
+- 不转人工，保持在工作状态，允许用户重新输入
+
+**系统错误 (System Error)**  
+- API接口调用异常
+- 网络连接失败
+- 服务内部错误
+- 立即转人工处理
+
+#### 🔸 API错误处理矩阵
+
+| 业务类型 | 错误场景 | state=886 | extract失败 | 其他异常 |
+|---------|---------|-----------|------------|----------|
+| **A001/A002 订单查询** | 订单号错误 | ❌转人工 ✅重试 | ❌转人工 ✅重试 | ✅转人工 |
+| **A004 活动查询** | 活动信息错误 | ❌转人工 ✅重试 | ❌转人工 ✅重试 | ✅转人工 |
+
+#### 🔸 特殊状态码处理
+
+**state=886 处理逻辑**
+```json
+{
+  "data": null,
+  "attributes": null,
+  "state": 886,
+  "message": "Missing required parameters"
+}
+```
+
+**含义解释：**
+- **A001/A002**：订单号错误，用户输入问题
+- **A004**：活动信息错误，用户提供信息不正确
+- **处理策略**：提示用户重新输入，不转人工，保持working状态
+
+### 用户体验优化
+
+#### 🔸 错误提示优化
+```javascript
+// A001/A002 订单查询错误
+if (state === 886 || !extract_success) {
+  response = "您提供的订单号可能有误，请核实后重新输入18位订单号";
+  transfer_human = 0;  // 不转人工
+  stage = "working";   // 保持工作状态
+}
+
+// A004 活动查询错误  
+if (state === 886 || !extract_success) {
+  response = "找不到您提到的活动，请确认活动名称或从活动列表中选择";
+  transfer_human = 0;  // 不转人工
+  stage = "working";   // 保持工作状态
+}
+```
+
+#### 🔸 智能重试机制
+- **用户输入错误**：提供友好提示，引导用户重新输入
+- **系统错误**：立即转人工，避免用户等待
+- **混合场景**：优先判断错误类型，分别处理
 
 ### 参数验证
 - **必填字段**：session_id, messages
 - **状态值**：0（未登录）或1（已登录）
 - **语言代码**：支持的语言列表
+- **Category验证**：可选参数，格式验证
 - **返回码**：422（参数错误）
 
-### 异常处理
-- **API调用失败**：自动转人工
-- **订单查询异常**：转人工处理
-- **图片上传失败**：记录日志并转人工
+### 异常处理策略
+
+#### 🔸 分层异常处理
+```python
+try:
+    # API调用
+    api_result = await query_api(params)
+    
+    # 错误类型判断
+    error_type = validate_session_and_handle_errors(api_result)
+    
+    if error_type == "user_input":
+        # 用户输入错误，不转人工
+        return handle_user_input_error()
+    elif error_type == "system":
+        # 系统错误，转人工处理
+        return handle_system_error()
+        
+except Exception as e:
+    # 未预期异常，转人工处理
+    return handle_critical_error()
+```
+
+#### 🔸 错误恢复机制
+- **配置热重载**：运行时修复配置问题
+- **连接重试**：自动重试临时网络问题
+- **降级服务**：关键服务不可用时的备用方案
+- **日志记录**：完整的错误追踪和分析
 
 ## 🧪 测试验证
 
@@ -337,11 +588,12 @@ python comprehensive_test.py
 **测试覆盖：**
 - **基础功能测试**：健康检查、配置重载
 - **用户状态测试**：登录/未登录处理
-- **意图识别测试**：中英文意图识别
+- **意图识别测试**：中英文意图识别，Category 参数增强
 - **业务流程测试**：S001/S002/S003完整流程
 - **订单号提取测试**：边界情况验证
-- **多语言测试**：4种语言支持
-- **错误处理测试**：参数验证、异常处理
+- **多语言测试**：5种语言支持
+- **错误处理测试**：参数验证、智能错误分类、异常处理
+- **Category 功能测试**：分类路由、活动识别增强、特殊场景处理
 - **性能测试**：响应时间、并发能力
 - **配置测试**：文件完整性检查
 
@@ -405,6 +657,8 @@ save                   # 保存对话记录到文件
 /test_withdraw_19       # 测试19位数字拒绝（提现场景）
 /test_image_upload      # 测试图片上传转人工
 /test_multilang         # 测试多语言支持
+/test_category          # 测试Category参数功能
+/test_error_handling    # 测试智能错误处理机制
 ```
 
 #### 💬 对话示例
@@ -458,6 +712,23 @@ save                   # 保存对话记录到文件
 🎯 识别意图: S001
 ```
 
+**Category 参数测试：**
+```
+💬 请输入消息: /test_category
+🧪 测试Category参数功能...
+
+💬 请输入消息: 我想查看代理奖励活动
+📝 Category: {"Promotion Bonus": "Agent"}
+🤖 AI: 正在为您查询代理相关活动...
+🎯 识别意图: S003 (活动查询)
+💡 活动匹配: 基于Agent分类，重点关注代理佣金、代理推荐等活动
+
+💬 请输入消息: 我的充值还没有到账
+📝 Category: {"Deposit": "Deposit not received"}  
+🤖 AI: 充值到账通常需要1-5分钟，如果超过时间请联系客服...
+🔄 AI直接处理，不进入S001流程
+```
+
 #### 🎯 测试场景覆盖
 
 **核心业务流程：**
@@ -467,10 +738,12 @@ save                   # 保存对话记录到文件
 - ✅ 人工客服转接：图片上传、异常状态
 
 **智能识别测试：**
-- ✅ 意图自动识别：中英文关键词识别
+- ✅ 意图自动识别：中英文关键词识别，Category 参数增强
 - ✅ 订单号精确提取：18位数字识别，拒绝19位
 - ✅ 阶段智能跟踪：多轮对话状态维护
 - ✅ 图片优先检测：任意阶段图片转人工
+- ✅ 智能错误分类：用户输入错误 vs 系统错误
+- ✅ 活动精准匹配：基于 Category 的活动类型指导
 
 **多语言支持：**
 - ✅ 中文(zh)：我的充值还没有到账
@@ -738,9 +1011,26 @@ curl http://localhost:8000/health
 
 ---
 
-**版本**：v1.0.0  
-**更新时间**：2025-06-10  
+**版本**：v1.1.0  
+**更新时间**：2025-01-10  
 **维护团队**：ChatAI开发组
+
+### 🔄 版本更新记录
+
+#### v1.1.0 (2025-01-10)
+- ✅ **新增 Category 参数支持**：基于用户意图分类提供精准的业务流程识别
+- ✅ **智能错误处理优化**：区分用户输入错误和系统错误，优化用户体验
+- ✅ **活动识别增强**：Category 参数为活动查询提供精准的活动类型指导
+- ✅ **API错误分类**：state=886 等特殊状态码的智能处理
+- ✅ **用户体验提升**：避免不必要的人工转接，提供更友好的错误提示
+
+#### v1.0.0 (2025-06-10)
+- ✅ 基础智能对话功能
+- ✅ 多语言支持 (中英日泰他加禄语)
+- ✅ S001/S002/S003 业务流程支持
+- ✅ Token 认证机制
+- ✅ 图片处理和 TG 群推送
+- ✅ 完整的日志系统
 
 ## 🤝 贡献指南
 
