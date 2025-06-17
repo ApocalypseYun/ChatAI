@@ -883,7 +883,8 @@ async def _handle_unclear_activity(request: MessageRequest, status_messages: Dic
     
     return ProcessingResult(
         text=response_text,
-        stage=ResponseStage.WORKING.value
+        stage=ResponseStage.WORKING.value,
+        message_type=BusinessType.ACTIVITY_QUERY.value
     )
 
 
@@ -923,7 +924,8 @@ async def _query_user_activity_eligibility(request: MessageRequest, activity_nam
         return ProcessingResult(
             text=response_text,
             transfer_human=1,
-            stage=ResponseStage.FINISH.value
+            stage=ResponseStage.FINISH.value,
+            message_type=BusinessType.ACTIVITY_QUERY.value
         )
 
 
