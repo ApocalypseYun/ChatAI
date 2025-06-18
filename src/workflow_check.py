@@ -121,8 +121,21 @@ async def identify_intent(messages: str, history: List[Dict[str, Any]], language
     business_types = config.get("business_types", {})
     if ai_result in business_types:
         return ai_result
-    # 返回不合法，转人工
-    return "human_service"
+    # 返回不合法，判断是否为闲聊还是需要人工
+    # 如果是明确的人工客服请求，返回human_service，否则返回chat_service
+    human_service_keywords = {
+        "zh": ["人工", "客服", "转人工", "人工客服", "客服人员"],
+        "en": ["human", "agent", "customer service", "representative", "support staff"],
+        "th": ["มนุษย์", "เจ้าหน้าที่", "บริการลูกค้า"],
+        "tl": ["tao", "customer service", "representative"],
+        "ja": ["人間", "担当者", "カスタマーサービス"]
+    }
+    
+    keywords = human_service_keywords.get(language, human_service_keywords["en"])
+    if any(keyword in messages.lower() for keyword in keywords):
+        return "human_service"
+    else:
+        return "chat_service"
 
 async def identify_stage(intent: str, messages: str, history: List[Dict[str, Any]]) -> str:
     prompt = _build_stage_prompt(intent, messages, history)

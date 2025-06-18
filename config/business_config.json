@@ -39,16 +39,16 @@
                 "1": {
                     "step": "询问用户需要查询的【订单编号】",
                     "response": {
-                        "text": "您需要查询的【订单编号】是多少？"
-                    },
-                    "images": []
+                        "text": "您需要查询的【订单编号】是多少？",
+                        "images": []
+                    }
                 },
                 "2": {
                     "step": "不知道【订单编号】",
                     "response": {
-                        "text": "按照下面图片的指引进行操作"
-                    },
-                    "images": ["https://img.lodirnd.com/lodi/depositOrder.webp"]
+                        "text": "按照下面图片的指引进行操作",
+                        "images": ["https://img.lodirnd.com/lodi/depositOrder.webp"]
+                    }
                 },
                 "3": {
                     "step": "提供【订单编号】"
@@ -56,9 +56,9 @@
                 "4": {
                     "step": "已完成",
                     "response": {
-                        "text": "还有什么需要帮助的吗？如果没有，非常感谢本次来信。"
-                    },
-                    "images": []
+                        "text": "还有什么需要帮助的吗？如果没有，非常感谢本次来信。",
+                        "images": []
+                    }
                 }
             },
             "status_messages": {
@@ -162,16 +162,16 @@
                 "1": {
                     "step": "询问用户需要查询的【订单编号】",
                     "response": {
-                        "text": "您需要查询的【订单编号】是多少？"
-                    },
-                    "images": []
+                        "text": "您需要查询的【订单编号】是多少？",
+                        "images": []
+                    }
                 },
                 "2": {
                     "step": "不知道【订单编号】",
                     "response": {
-                        "text": "按照下面图片的指引进行操作"
-                    },
-                    "images": ["https://img.lodirnd.com/lodi/withdrawalOrder.webp"]
+                        "text": "按照下面图片的指引进行操作",
+                        "images": ["https://img.lodirnd.com/lodi/withdrawalOrder.webp"]
+                    }
                 },
                 "3": {
                     "step": "提供【订单编号】"
@@ -179,9 +179,9 @@
                 "4": {
                     "step": "已完成",
                     "response": {
-                        "text": "还有什么需要帮助的吗？如果没有，非常感谢本次来信。"
-                    },
-                    "images": []
+                        "text": "还有什么需要帮助的吗？如果没有，非常感谢本次来信。",
+                        "images": []
+                    }
                 }
             },
             "status_messages": {

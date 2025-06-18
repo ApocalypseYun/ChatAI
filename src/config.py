@@ -79,19 +79,24 @@ def load_business_config() -> Dict:
                 "tl": "Ikaw ay gumagawa ng deposit. Mangyaring sundin ang mga tagubilin."
             },
             "workflow": {
+                "0": {
+                    "step": "非充值相关询问，转人工处理",
+                    "description": "用户询问的内容与充值流程无关，直接转人工客服",
+                    "transfer_human": True
+                },
                 "1": {
                     "step": "询问用户需要查询的【订单编号】",
                     "response": {
-                        "text": "您需要查询的【订单编号】是多少？"
-                    },
-                    "images": []
+                        "text": "您需要查询的【订单编号】是多少？",
+                        "images": []
+                    }
                 },
                 "2": {
                     "step": "不知道【订单编号】",
                     "response": {
-                        "text": "按照下面图片的指引进行操作"
-                    },
-                    "images": ["https://img.lodirnd.com/lodi/depositOrder.webp"]
+                        "text": "按照下面图片的指引进行操作",
+                        "images": ["https://img.lodirnd.com/lodi/depositOrder.webp"]
+                    }
                 },
                 "3": {
                     "step": "提供【订单编号】"
@@ -99,9 +104,9 @@ def load_business_config() -> Dict:
                 "4": {
                     "step": "已完成",
                     "response": {
-                        "text": "还有什么需要帮助的吗？如果没有，非常感谢本次来信。"
-                    },
-                    "images": []
+                        "text": "还有什么需要帮助的吗？如果没有，非常感谢本次来信。",
+                        "images": []
+                    }
                 }
             },
             "status_messages": {
@@ -136,16 +141,10 @@ def load_business_config() -> Dict:
                     "tl": "Hindi mahanap ang status ng recharge. Na-transfer na kayo sa customer service."
                 },
                 "order_not_found": {
-                    "zh": "请提供正确的18位订单号。您可以在交易记录中查看完整的订单号。",
-                    "en": "Please provide the correct 18-digit order number. You can view the complete order number in your transaction history.",
-                    "th": "กรุณาระบุหมายเลขคำสั่งซื้อ 18 หลักที่ถูกต้อง คุณสามารถดูหมายเลขคำสั่งซื้อที่สมบูรณ์ในประวัติการทำธุรกรรมของคุณ",
-                    "tl": "Mangyaring magbigay ng tamang 18-digit na order number. Maaari ninyong tingnan ang kumpletong order number sa inyong transaction history."
-                },
-                "invalid_order_number": {
-                    "zh": "您提供的订单号格式不正确或不存在。请检查后重新输入正确的18位数字订单号。",
-                    "en": "The order number you provided is incorrect or does not exist. Please check and re-enter the correct 18-digit order number.",
-                    "th": "หมายเลขคำสั่งซื้อที่คุณระบุไม่ถูกต้องหรือไม่มีอยู่ กรุณาตรวจสอบและป้อนหมายเลขคำสั่งซื้อ 18 หลักที่ถูกต้องอีกครั้ง",
-                    "tl": "Ang order number na inyong binigay ay hindi tama o hindi umiiral. Mangyaring suriin at muling ilagay ang tamang 18-digit na order number."
+                    "zh": "未能识别到您的订单号，请明确提供您的订单号。",
+                    "en": "Could not identify your order number. Please provide your order number clearly.",
+                    "th": "ไม่สามารถระบุหมายเลขคำสั่งซื้อของคุณได้ กรุณาระบุหมายเลขคำสั่งซื้อของคุณอย่างชัดเจน",
+                    "tl": "Hindi makita ang inyong order number. Mangyaring magbigay ng malinaw na order number."
                 },
                 "image_uploaded": {
                     "zh": "您上传了图片，已为您转接人工客服。",
@@ -158,6 +157,18 @@ def load_business_config() -> Dict:
                     "en": "Session has expired. Please login again and try.",
                     "th": "เซสชันหมดอายุแล้ว กรุณาเข้าสู่ระบบใหม่และลองอีกครั้ง",
                     "tl": "Nag-expire na ang session. Mangyaring mag-login ulit at subukan."
+                },
+                "invalid_order_number": {
+                    "zh": "订单号错误，系统中查询不到此订单信息，请提供正确的18位订单号。",
+                    "en": "Incorrect order number, no order information found in the system. Please provide the correct 18-digit order number.",
+                    "th": "หมายเลขคำสั่งซื้อไม่ถูกต้อง ไม่พบข้อมูลคำสั่งซื้อในระบบ กรุณาระบุหมายเลขคำสั่งซื้อ 18 หลักที่ถูกต้อง",
+                    "tl": "Mali ang order number, walang nahanap na order information sa system. Mangyaring magbigay ng tamang 18-digit na order number."
+                },
+                "non_business_inquiry": {
+                    "zh": "您的问题不在充值查询范围内，已为您转接人工客服。",
+                    "en": "Your inquiry is not related to recharge queries. You have been transferred to customer service.",
+                    "th": "คำถามของคุณไม่อยู่ในขอบเขตการสอบถามการเติมเงิน คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "Ang inyong tanong ay hindi related sa recharge queries. Na-transfer na kayo sa customer service."
                 }
             }
         },
@@ -191,19 +202,24 @@ def load_business_config() -> Dict:
                 "tl": "Ikaw ay gumagawa ng withdrawal. Mangyaring sundin ang mga tagubilin."
             },
             "workflow": {
+                "0": {
+                    "step": "非提现相关询问，转人工处理",
+                    "description": "用户询问的内容与提现流程无关，直接转人工客服",
+                    "transfer_human": True
+                },
                 "1": {
                     "step": "询问用户需要查询的【订单编号】",
                     "response": {
-                        "text": "您需要查询的【订单编号】是多少？"
-                    },
-                    "images": []
+                        "text": "您需要查询的【订单编号】是多少？",
+                        "images": []
+                    }
                 },
                 "2": {
                     "step": "不知道【订单编号】",
                     "response": {
-                        "text": "按照下面图片的指引进行操作"
-                    },
-                    "images": ["https://img.lodirnd.com/lodi/withdrawalOrder.webp"]
+                        "text": "按照下面图片的指引进行操作",
+                        "images": ["https://img.lodirnd.com/lodi/withdrawalOrder.webp"]
+                    }
                 },
                 "3": {
                     "step": "提供【订单编号】"
@@ -211,9 +227,9 @@ def load_business_config() -> Dict:
                 "4": {
                     "step": "已完成",
                     "response": {
-                        "text": "还有什么需要帮助的吗？如果没有，非常感谢本次来信。"
-                    },
-                    "images": []
+                        "text": "还有什么需要帮助的吗？如果没有，非常感谢本次来信。",
+                        "images": []
+                    }
                 }
             },
             "status_messages": {
@@ -254,16 +270,10 @@ def load_business_config() -> Dict:
                     "tl": "Hindi mahanap ang status ng withdrawal. Na-transfer na kayo sa customer service."
                 },
                 "order_not_found": {
-                    "zh": "请提供正确的18位订单号。您可以在交易记录中查看完整的订单号。",
-                    "en": "Please provide the correct 18-digit order number. You can view the complete order number in your transaction history.",
-                    "th": "กรุณาระบุหมายเลขคำสั่งซื้อ 18 หลักที่ถูกต้อง คุณสามารถดูหมายเลขคำสั่งซื้อที่สมบูรณ์ในประวัติการทำธุรกรรมของคุณ",
-                    "tl": "Mangyaring magbigay ng tamang 18-digit na order number. Maaari ninyong tingnan ang kumpletong order number sa inyong transaction history."
-                },
-                "invalid_order_number": {
-                    "zh": "您提供的订单号格式不正确或不存在。请检查后重新输入正确的18位数字订单号。",
-                    "en": "The order number you provided is incorrect or does not exist. Please check and re-enter the correct 18-digit order number.",
-                    "th": "หมายเลขคำสั่งซื้อที่คุณระบุไม่ถูกต้องหรือไม่มีอยู่ กรุณาตรวจสอบและป้อนหมายเลขคำสั่งซื้อ 18 หลักที่ถูกต้องอีกครั้ง",
-                    "tl": "Ang order number na inyong binigay ay hindi tama o hindi umiiral. Mangyaring suriin at muling ilagay ang tamang 18-digit na order number."
+                    "zh": "未能识别到您的订单号，请明确提供您的订单号。",
+                    "en": "Could not identify your order number. Please provide your order number clearly.",
+                    "th": "ไม่สามารถระบุหมายเลขคำสั่งซื้อของคุณได้ กรุณาระบุหมายเลขคำสั่งซื้อของคุณอย่างชัดเจน",
+                    "tl": "Hindi makita ang inyong order number. Mangyaring magbigay ng malinaw na order number."
                 },
                 "image_uploaded": {
                     "zh": "您上传了图片，已为您转接人工客服。",
@@ -276,6 +286,18 @@ def load_business_config() -> Dict:
                     "en": "Session has expired. Please login again and try.",
                     "th": "เซสชันหมดอายุแล้ว กรุณาเข้าสู่ระบบใหม่และลองอีกครั้ง",
                     "tl": "Nag-expire na ang session. Mangyaring mag-login ulit at subukan."
+                },
+                "invalid_order_number": {
+                    "zh": "订单号错误，系统中查询不到此订单信息，请提供正确的18位订单号。",
+                    "en": "Incorrect order number, no order information found in the system. Please provide the correct 18-digit order number.",
+                    "th": "หมายเลขคำสั่งซื้อไม่ถูกต้อง ไม่พบข้อมูลคำสั่งซื้อในระบบ กรุณาระบุหมายเลขคำสั่งซื้อ 18 หลักที่ถูกต้อง",
+                    "tl": "Mali ang order number, walang nahanap na order information sa system. Mangyaring magbigay ng tamang 18-digit na order number."
+                },
+                "non_business_inquiry": {
+                    "zh": "您的问题不在提现查询范围内，已为您转接人工客服。",
+                    "en": "Your inquiry is not related to withdrawal queries. You have been transferred to customer service.",
+                    "th": "คำถามของคุณไม่อยู่ในขอบเขตการสอบถามการถอนเงิน คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "Ang inyong tanong ay hindi related sa withdrawal queries. Na-transfer na kayo sa customer service."
                 }
             }
         },
@@ -333,6 +355,11 @@ def load_business_config() -> Dict:
                 "tl": "Ikaw ay nagtatanong tungkol sa impormasyon ng aktibidad. Hayaan akong tingnan ang mga available na aktibidad para sa iyo."
             },
             "workflow": {
+                "0": {
+                    "step": "非活动相关询问，转人工处理",
+                    "description": "用户询问的内容与活动流程无关，直接转人工客服",
+                    "transfer_human": True
+                },
                 "1": {
                     "step": "查询活动列表并识别用户想要的活动",
                     "response": {
@@ -393,6 +420,12 @@ def load_business_config() -> Dict:
                     "th": "การสอบถามกิจกรรมล้มเหลว คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
                     "tl": "Nabigo ang activity query. Na-transfer na kayo sa customer service."
                 },
+                "activity_not_found": {
+                    "zh": "查询不到您所说的活动信息，请提供正确的活动名称或描述。",
+                    "en": "Cannot find the activity information you mentioned. Please provide the correct activity name or description.",
+                    "th": "ไม่สามารถค้นหาข้อมูลกิจกรรมที่คุณกล่าวถึงได้ กรุณาระบุชื่อกิจกรรมหรือคำอธิบายที่ถูกต้อง",
+                    "tl": "Hindi mahanap ang activity information na inyong binanggit. Mangyaring magbigay ng tamang activity name o description."
+                },
                 "unclear_activity": {
                     "zh": "我为您找到了以下活动，请明确您想查询的具体活动：",
                     "en": "I found the following activities for you. Please specify which activity you want to inquire about:",
@@ -410,6 +443,12 @@ def load_business_config() -> Dict:
                     "en": "Session has expired. Please login again and try.",
                     "th": "เซสชันหมดอายุแล้ว กรุณาเข้าสู่ระบบใหม่และลองอีกครั้ง",
                     "tl": "Nag-expire na ang session. Mangyaring mag-login ulit at subukan."
+                },
+                "non_business_inquiry": {
+                    "zh": "您的问题不在活动查询范围内，已为您转接人工客服。",
+                    "en": "Your inquiry is not related to activity queries. You have been transferred to customer service.",
+                    "th": "คำถามของคุณไม่อยู่ในขอบเขตการสอบถามกิจกรรม คุณถูกโอนไปยังฝ่ายบริการลูกค้าแล้ว",
+                    "tl": "Ang inyong tanong ay hindi related sa activity queries. Na-transfer na kayo sa customer service."
                 }
             }
         }
@@ -468,9 +507,23 @@ def load_business_config() -> Dict:
         "default_model": "gpt-4",
         "default_temperature": 0.7,
         "default_max_tokens": 1024
+    },
+    "logging": {
+        "enabled": True,
+        "config_file": "config/logging_config.json",
+        "log_level": "INFO",
+        "log_api_calls": True,
+        "log_user_messages": False,
+        "log_sensitive_data": False,
+        "performance_monitoring": True
+    },
+    "auth": {
+        "secret_key": "ChatAI_Production_Secret_Key_2024_@#$%^&*()",
+        "token_max_age": 3600,
+        "require_token_for_logged_users": True,
+        "token_refresh_threshold": 300
     }
 }
-            
             # 确保配置目录存在
             os.makedirs(os.path.dirname(BUSINESS_CONFIG_PATH), exist_ok=True)
             

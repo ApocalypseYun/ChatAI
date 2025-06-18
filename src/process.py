@@ -25,12 +25,14 @@ class Constants:
     ORDER_NUMBER_LENGTH = 18
     GUIDANCE_THRESHOLD_ROUNDS = 5
     ACTIVITY_GUIDANCE_THRESHOLD = 2
+    MAX_CHAT_ROUNDS = 7  # 闲聊最大轮数
 
 class BusinessType(Enum):
     RECHARGE_QUERY = "S001"
     WITHDRAWAL_QUERY = "S002"
     ACTIVITY_QUERY = "S003"
     HUMAN_SERVICE = "human_service"
+    CHAT_SERVICE = "chat_service"  # 闲聊服务
 
 class ResponseStage(Enum):
     WORKING = "working"
@@ -259,7 +261,8 @@ def _should_transfer_to_human(message_type: str) -> bool:
     return (message_type == BusinessType.HUMAN_SERVICE.value or 
             message_type not in [BusinessType.RECHARGE_QUERY.value, 
                                BusinessType.WITHDRAWAL_QUERY.value, 
-                               BusinessType.ACTIVITY_QUERY.value])
+                               BusinessType.ACTIVITY_QUERY.value,
+                               BusinessType.CHAT_SERVICE.value])
 
 
 async def _handle_human_service_request(request: MessageRequest, message_type: str) -> ProcessingResult:
@@ -324,6 +327,8 @@ async def _handle_business_process(request: MessageRequest, message_type: str) -
         return await _handle_s002_process(request, stage_number, workflow, status_messages, config)
     elif message_type == BusinessType.ACTIVITY_QUERY.value:
         return await _handle_s003_process(request, stage_number, status_messages, config)
+    elif message_type == BusinessType.CHAT_SERVICE.value:
+        return await handle_chat_service(request)
     
     # 默认情况
     result = ProcessingResult(
@@ -367,25 +372,15 @@ async def _handle_stage_zero(request: MessageRequest, message_type: str, status_
             message_type=message_type
         )
     else:
-        # 没有预设业务类型，转人工
-        logger.warning(f"识别为0阶段，非{message_type}相关询问，转人工处理", extra={
+        # 没有预设业务类型，处理为闲聊
+        logger.info(f"识别为0阶段，非{message_type}相关询问，处理为闲聊", extra={
             'session_id': request.session_id,
             'business_type': message_type,
             'stage': 0,
-            'transfer_reason': 'non_business_inquiry'
+            'chat_mode': True
         })
         
-        response_text = get_message_by_language(
-            status_messages.get("non_business_inquiry", {}), 
-            request.language
-        )
-        
-        return ProcessingResult(
-            text=response_text,
-            transfer_human=1,
-            stage=ResponseStage.FINISH.value,
-            message_type=message_type
-        )
+        return await handle_chat_service(request)
 
 
 def _build_response(request: MessageRequest, result: ProcessingResult, start_time: float) -> MessageResponse:
@@ -806,7 +801,8 @@ async def _handle_s003_process(request: MessageRequest, stage_number: int,
         return ProcessingResult(
             text=response_text,
             transfer_human=1,
-            stage=ResponseStage.FINISH.value
+            stage=ResponseStage.FINISH.value,
+            message_type=BusinessType.ACTIVITY_QUERY.value
         )
 
 
@@ -840,7 +836,8 @@ async def _handle_activity_query(request: MessageRequest, status_messages: Dict)
         return ProcessingResult(
             text=final_text,
             transfer_human=1 if error_type == "system" else 0,
-            stage=ResponseStage.FINISH.value if error_type == "system" else ResponseStage.WORKING.value
+            stage=ResponseStage.FINISH.value if error_type == "system" else ResponseStage.WORKING.value,
+            message_type=BusinessType.ACTIVITY_QUERY.value
         )
     
     extracted_data = extract_activity_list(api_result)
@@ -854,7 +851,8 @@ async def _handle_activity_query(request: MessageRequest, status_messages: Dict)
         return ProcessingResult(
             text=final_text,
             transfer_human=1,
-            stage=ResponseStage.FINISH.value
+            stage=ResponseStage.FINISH.value,
+            message_type=BusinessType.ACTIVITY_QUERY.value
         )
     
     # 构建活动列表
@@ -875,7 +873,8 @@ async def _handle_activity_query(request: MessageRequest, status_messages: Dict)
         final_text = await call_openapi_model(prompt=prompt)
         result = ProcessingResult(
             text=final_text,
-            stage=ResponseStage.FINISH.value
+            stage=ResponseStage.FINISH.value,
+            message_type=BusinessType.ACTIVITY_QUERY.value
         )
         # 为非转人工的结果添加后续询问
         return _add_follow_up_to_result(result, request.language)
@@ -1135,7 +1134,8 @@ async def _process_activity_eligibility(eligibility_data: Dict, status_messages:
     result = ProcessingResult(
         text=final_text,
         stage=stage,
-        transfer_human=transfer_human
+        transfer_human=transfer_human,
+        message_type=BusinessType.ACTIVITY_QUERY.value
     )
     
     # 为非转人工的结果添加后续询问
@@ -1203,4 +1203,261 @@ def validate_session_and_handle_errors(api_result, status_messages, language):
             language
         ), "system"
     
-    return True, "", None 
+    return True, "", None
+
+
+async def identify_message_type(messages: str, language: str) -> str:
+    """
+    识别消息类型：正常闲聊 vs 不当言论
+    
+    Args:
+        messages: 用户消息
+        language: 语言
+        
+    Returns:
+        str: "normal_chat" - 正常闲聊, "inappropriate" - 不当言论
+    """
+    logger = get_logger("chatai-api")
+    
+    if language == "en":
+        prompt = f"""
+You are a message classification assistant. Classify the user's message as either normal chat or inappropriate content.
+
+User message: {messages}
+
+Criteria for classification:
+- "normal_chat": Friendly conversation, questions about general topics, greetings, polite inquiries
+- "inappropriate": Abusive language, swearing, insults, nonsensical input, spam, harassment
+
+Please respond with only "normal_chat" or "inappropriate".
+"""
+    elif language == "th":
+        prompt = f"""
+คุณเป็นผู้ช่วยจำแนกข้อความ จำแนกข้อความของผู้ใช้ว่าเป็นการสนทนาปกติหรือเนื้อหาที่ไม่เหมาะสม
+
+ข้อความของผู้ใช้: {messages}
+
+เกณฑ์การจำแนก:
+- "normal_chat": การสนทนาที่เป็นมิตร คำถามเกี่ยวกับหัวข้อทั่วไป การทักทาย การสอบถามอย่างสุภาพ
+- "inappropriate": ภาษาที่ดูหมิ่น การด่าทอ การดูถูก การป้อนข้อมูลที่ไร้สาระ สแปม การคุกคาม
+
+กรุณาตอบเพียง "normal_chat" หรือ "inappropriate" เท่านั้น
+"""
+    elif language == "tl":
+        prompt = f"""
+Ikaw ay isang message classification assistant. I-classify ang mensahe ng user bilang normal chat o inappropriate content.
+
+Mensahe ng user: {messages}
+
+Criteria para sa classification:
+- "normal_chat": Friendly na pag-uusap, mga tanong tungkol sa general topics, pagbati, magalang na pagtatanong
+- "inappropriate": Masasamang salita, mura, pang-iinsulto, walang-senseng input, spam, harassment
+
+Mangyaring tumugon lamang ng "normal_chat" o "inappropriate".
+"""
+    elif language == "ja":
+        prompt = f"""
+あなたはメッセージ分類アシスタントです。ユーザーのメッセージを通常のチャットか不適切なコンテンツかに分類してください。
+
+ユーザーメッセージ: {messages}
+
+分類基準:
+- "normal_chat": 友好的な会話、一般的なトピックに関する質問、挨拶、丁寧な問い合わせ
+- "inappropriate": 暴言、罵倒、侮辱、無意味な入力、スパム、嫌がらせ
+
+"normal_chat"または"inappropriate"のみで回答してください。
+"""
+    else:  # 默认中文
+        prompt = f"""
+你是消息分类助手。将用户的消息分类为正常闲聊或不当言论。
+
+用户消息：{messages}
+
+分类标准：
+- "normal_chat"：友好对话、一般性话题询问、问候、礼貌咨询
+- "inappropriate"：辱骂语言、脏话、侮辱、无意义输入、垃圾信息、骚扰
+
+请只回复"normal_chat"或"inappropriate"。
+"""
+    
+    try:
+        response = await call_openapi_model(prompt=prompt)
+        result = response.strip().lower()
+        return "normal_chat" if result == "normal_chat" else "inappropriate"
+    except Exception as e:
+        logger.error(f"消息类型识别失败", extra={
+            'error': str(e),
+            'message': messages[:100]
+        })
+        # 默认返回normal_chat，避免误判
+        return "normal_chat"
+
+
+async def handle_chat_service(request: MessageRequest) -> ProcessingResult:
+    """
+    处理闲聊服务
+    
+    Args:
+        request: 用户请求
+        
+    Returns:
+        ProcessingResult: 处理结果
+    """
+    logger = get_logger("chatai-api")
+    conversation_rounds = len(request.history or []) // 2
+    
+    logger.info(f"处理闲聊服务", extra={
+        'session_id': request.session_id,
+        'conversation_rounds': conversation_rounds,
+        'max_chat_rounds': Constants.MAX_CHAT_ROUNDS
+    })
+    
+    # 检查是否超过闲聊轮数限制
+    if conversation_rounds >= Constants.MAX_CHAT_ROUNDS:
+        logger.info(f"闲聊轮数超过限制，结束对话", extra={
+            'session_id': request.session_id,
+            'conversation_rounds': conversation_rounds,
+            'limit': Constants.MAX_CHAT_ROUNDS
+        })
+        
+        end_message = get_message_by_language({
+            "zh": "我们已经聊了很久了，感谢您的陪伴！如果您有任何业务问题需要帮助，欢迎随时联系我们。祝您生活愉快！",
+            "en": "We've been chatting for a while, thank you for your company! If you have any business questions that need help, feel free to contact us anytime. Have a great day!",
+            "th": "เราคุยกันมานานแล้ว ขอบคุณที่ให้เวลา! หากคุณมีคำถามทางธุรกิจที่ต้องการความช่วยเหลือ สามารถติดต่อเราได้ตลอดเวลา ขอให้มีความสุข!",
+            "tl": "Matagal na nating nakakausap, salamat sa inyong oras! Kung may mga tanong kayo tungkol sa business na kailangan ng tulong, makipag-ugnayan sa amin anumang oras. Magkaroon ng magandang araw!",
+            "ja": "長い間お話しできて、お時間をいただきありがとうございました！ビジネスに関するご質問がございましたら、いつでもお気軽にお声かけください。良い一日をお過ごしください！"
+        }, request.language)
+        
+        return ProcessingResult(
+            text=end_message,
+            stage=ResponseStage.FINISH.value,
+            transfer_human=0,
+            message_type=BusinessType.CHAT_SERVICE.value
+        )
+    
+    # 识别消息类型
+    message_type = await identify_message_type(request.messages, request.language)
+    
+    if message_type == "inappropriate":
+        # 处理不当言论
+        logger.warning(f"检测到不当言论", extra={
+            'session_id': request.session_id,
+            'message_preview': request.messages[:50]
+        })
+        
+        response_text = get_message_by_language({
+            "zh": "请您理性表达，详细描述您遇到的问题，我很乐意为您提供帮助。有什么问题要帮您的？",
+            "en": "Please express yourself rationally and describe your problem in detail. I'm happy to help you. Is there anything I can help you with?",
+            "th": "โปรดแสดงออกอย่างมีเหตุผลและอธิบายปัญหาของคุณโดยละเอียด ฉันยินดีที่จะช่วยคุณ มีอะไรที่ฉันช่วยคุณได้ไหม?",
+            "tl": "Mangyaring magpahayag nang makatuwiran at ilarawan ang inyong problema nang detalyado. Natutuwa akong tumulong sa inyo. May maitutulong ba ako sa inyo?",
+            "ja": "理性的に表現し、問題を詳しく説明してください。喜んでお手伝いいたします。何かお手伝いできることはありますか？"
+        }, request.language)
+        
+        return ProcessingResult(
+            text=response_text,
+            stage=ResponseStage.WORKING.value,
+            transfer_human=0,
+            message_type=BusinessType.CHAT_SERVICE.value
+        )
+    
+    # 处理正常闲聊
+    logger.info(f"处理正常闲聊", extra={
+        'session_id': request.session_id,
+        'conversation_rounds': conversation_rounds
+    })
+    
+    # 构建闲聊回复的prompt
+    if request.language == "en":
+        chat_prompt = f"""
+You are a friendly customer service assistant. The user is having a casual conversation with you. Please provide a warm, helpful response to their message and then ask if there's anything you can help them with.
+
+User message: {request.messages}
+
+Please respond naturally to their message first, then end with asking "Is there anything I can help you with?"
+
+Keep your response friendly, concise, and professional.
+"""
+    elif request.language == "th":
+        chat_prompt = f"""
+คุณเป็นผู้ช่วยบริการลูกค้าที่เป็นมิตร ผู้ใช้กำลังสนทนาสบายๆ กับคุณ กรุณาให้การตอบกลับที่อบอุ่นและเป็นประโยชน์ต่อข้อความของพวกเขา จากนั้นถามว่ามีอะไรที่คุณสามารถช่วยได้หรือไม่
+
+ข้อความของผู้ใช้: {request.messages}
+
+กรุณาตอบสนองต่อข้อความของพวกเขาอย่างเป็นธรรมชาติก่อน จากนั้นจบด้วยการถาม "มีอะไรที่ฉันช่วยคุณได้ไหม?"
+
+ให้การตอบกลับของคุณเป็นมิตร กระชับ และเป็นมืออาชีพ
+"""
+    elif request.language == "tl":
+        chat_prompt = f"""
+Ikaw ay isang friendly na customer service assistant. Ang user ay nakikipag-casual conversation sa iyo. Mangyaring magbigay ng mainit at nakakatulong na tugon sa kanilang mensahe at tanungin kung may maitutulong ka.
+
+Mensahe ng user: {request.messages}
+
+Mangyaring tumugon nang natural sa kanilang mensahe muna, tapos tapusin sa pagtatanong ng "May maitutulong ba ako sa inyo?"
+
+Panatilihin ang inyong tugon na friendly, concise, at professional.
+"""
+    elif request.language == "ja":
+        chat_prompt = f"""
+あなたは親しみやすいカスタマーサービスアシスタントです。ユーザーはあなたとカジュアルな会話をしています。彼らのメッセージに温かく有用な回答を提供し、何かお手伝いできることがあるかを尋ねてください。
+
+ユーザーメッセージ: {request.messages}
+
+まず彼らのメッセージに自然に応答し、最後に「何かお手伝いできることはありますか？」と尋ねて終わってください。
+
+回答は親しみやすく、簡潔で、プロフェッショナルに保ってください。
+"""
+    else:  # 默认中文
+        chat_prompt = f"""
+你是一个友好的客服助手。用户正在与你进行闲聊对话。请对他们的消息提供温暖、有帮助的回复，然后询问有什么可以帮助他们的。
+
+用户消息：{request.messages}
+
+请首先自然地回应他们的消息，然后以询问"有什么问题要帮您的？"结尾。
+
+保持你的回复友好、简洁、专业。
+"""
+    
+    try:
+        response_text = await call_openapi_model(prompt=chat_prompt)
+        
+        # 确保回复以询问结尾
+        help_question = get_message_by_language({
+            "zh": "有什么问题要帮您的？",
+            "en": "Is there anything I can help you with?",
+            "th": "มีอะไรที่ฉันช่วยคุณได้ไหม?",
+            "tl": "May maitutulong ba ako sa inyo?",
+            "ja": "何かお手伝いできることはありますか？"
+        }, request.language)
+        
+        if not any(keyword in response_text for keyword in ["有什么问题要帮您的", "Is there anything I can help you with", "มีอะไรที่ฉันช่วยคุณได้ไหม", "May maitutulong ba ako sa inyo", "何かお手伝いできることはありますか"]):
+            response_text = f"{response_text} {help_question}"
+        
+        return ProcessingResult(
+            text=response_text,
+            stage=ResponseStage.WORKING.value,
+            transfer_human=0,
+            message_type=BusinessType.CHAT_SERVICE.value
+        )
+        
+    except Exception as e:
+        logger.error(f"闲聊回复生成失败", extra={
+            'session_id': request.session_id,
+            'error': str(e)
+        })
+        
+        # 回退到简单回复
+        fallback_response = get_message_by_language({
+            "zh": "感谢您的消息！有什么问题要帮您的？",
+            "en": "Thank you for your message! Is there anything I can help you with?",
+            "th": "ขอบคุณสำหรับข้อความของคุณ! มีอะไรที่ฉันช่วยคุณได้ไหม?",
+            "tl": "Salamat sa inyong mensahe! May maitutulong ba ako sa inyo?",
+            "ja": "メッセージをありがとうございます！何かお手伝いできることはありますか？"
+        }, request.language)
+        
+        return ProcessingResult(
+            text=fallback_response,
+            stage=ResponseStage.WORKING.value,
+            transfer_human=0,
+            message_type=BusinessType.CHAT_SERVICE.value
+        ) 
