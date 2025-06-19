@@ -180,6 +180,31 @@ async def _process_authenticated_user(request: MessageRequest) -> ProcessingResu
                 message_type=request.type or ""
             )
     
+    # 首先检查是否为模糊的deposit/withdrawal询问
+    ambiguous_type = await check_ambiguous_inquiry(str(request.messages), request.language)
+    if ambiguous_type:
+        return await handle_ambiguous_inquiry(ambiguous_type, request)
+    
+    # 检查是否为澄清后的回复（用户之前收到过模糊询问的回复）
+    if request.history and len(request.history) >= 2:
+        # 检查历史记录中是否有模糊询问的回复
+        last_ai_message = None
+        for message in reversed(request.history):
+            if message.get("role") == "assistant":
+                last_ai_message = message.get("content", "")
+                break
+        
+        if last_ai_message and ("请问您具体想了解什么" in last_ai_message or 
+                              "Could you please be more specific" in last_ai_message or
+                              "คุณช่วยบอกให้ชัดเจนกว่านี้" in last_ai_message or
+                              "maging mas specific" in last_ai_message or
+                              "もう少し具体的に" in last_ai_message):
+            # 检查是否有对应的模糊类型
+            if "充值" in last_ai_message or "deposit" in last_ai_message or "ฝาก" in last_ai_message or "入金" in last_ai_message:
+                return await handle_clarified_inquiry(request, "deposit_ambiguous")
+            elif "提现" in last_ai_message or "withdrawal" in last_ai_message or "ถอน" in last_ai_message or "出金" in last_ai_message:
+                return await handle_clarified_inquiry(request, "withdrawal_ambiguous")
+    
     # 获取或识别业务类型
     message_type = await _get_or_identify_business_type(request)
     
@@ -1944,3 +1969,313 @@ HUWAG magdagdag ng tanong tulad ng "May maitutulong ba ako sa inyo?" sa dulo - h
             stage=ResponseStage.WORKING.value,
             transfer_human=0
         ) 
+
+
+async def check_ambiguous_inquiry(messages: str, language: str) -> Optional[str]:
+    """
+    检查用户是否提出了模糊的deposit/withdrawal询问
+    
+    Args:
+        messages: 用户消息
+        language: 语言
+        
+    Returns:
+        Optional[str]: 如果是模糊询问，返回业务类型("deposit_ambiguous" 或 "withdrawal_ambiguous")，否则返回None
+    """
+    logger = get_logger("chatai-api")
+    
+    message_lower = messages.lower().strip()
+    
+    # 定义模糊关键词
+    ambiguous_keywords = {
+        "deposit": {
+            "zh": ["充值", "充钱", "存钱"],
+            "en": ["deposit", "recharge", "top up"],
+            "th": ["เติมเงิน", "ฝากเงิน"],
+            "tl": ["mag-deposit", "deposit"],
+            "ja": ["入金", "チャージ"]
+        },
+        "withdrawal": {
+            "zh": ["提现", "取钱", "出金"],
+            "en": ["withdraw", "withdrawal", "cash out"],
+            "th": ["ถอนเงิน"],
+            "tl": ["mag-withdraw", "withdrawal"],
+            "ja": ["出金", "引き出し"]
+        }
+    }
+    
+    # 明确的查询关键词，这些不算模糊询问
+    specific_keywords = {
+        "zh": ["没到账", "未到账", "没收到", "没有到", "什么时候到", "怎么操作", "如何操作", "订单号", "状态", "查询"],
+        "en": ["not received", "haven't received", "didn't receive", "when will", "how to", "order number", "status", "check"],
+        "th": ["ไม่ได้รับ", "ยังไม่ได้", "เมื่อไหร่", "วิธีการ", "หมายเลขคำสั่ง", "สถานะ"],
+        "tl": ["hindi natatanggap", "hindi pa", "kailan", "paano", "order number", "status"],
+        "ja": ["届いていない", "受け取っていない", "いつ", "方法", "注文番号", "状況"]
+    }
+    
+    # 如果包含明确的查询关键词，不算模糊询问
+    current_specific = specific_keywords.get(language, specific_keywords["en"])
+    if any(keyword in message_lower for keyword in current_specific):
+        return None
+    
+    # 检查是否只是简单提到了deposit或withdrawal
+    for biz_type, keywords in ambiguous_keywords.items():
+        current_keywords = keywords.get(language, keywords["en"])
+        for keyword in current_keywords:
+            if keyword.lower() in message_lower:
+                # 检查是否只是简单提到关键词，而没有具体问题
+                # 如果消息很短且只包含关键词，认为是模糊询问
+                words = message_lower.split()
+                if len(words) <= 3 and any(word == keyword.lower() for word in words):
+                    logger.info(f"检测到模糊{biz_type}询问", extra={
+                        'user_message': messages,
+                        'matched_keyword': keyword,
+                        'business_type': biz_type
+                    })
+                    return f"{biz_type}_ambiguous"
+    
+    return None
+
+
+async def handle_ambiguous_inquiry(business_type: str, request: MessageRequest) -> ProcessingResult:
+    """
+    处理模糊的业务询问，提供具体选项
+    
+    Args:
+        business_type: "deposit_ambiguous" 或 "withdrawal_ambiguous"
+        request: 用户请求
+        
+    Returns:
+        ProcessingResult: 处理结果
+    """
+    logger = get_logger("chatai-api")
+    
+    logger.info(f"处理模糊业务询问", extra={
+        'session_id': request.session_id,
+        'business_type': business_type,
+        'user_message': request.messages
+    })
+    
+    is_deposit = business_type == "deposit_ambiguous"
+    business_name = "充值" if is_deposit else "提现"
+    
+    if request.language == "en":
+        business_name_en = "deposit" if is_deposit else "withdrawal"
+        response_text = f"""I understand you're asking about {business_name_en}. Could you please be more specific about what you need help with?
+
+1. How to make a {business_name_en}?
+2. {business_name_en.capitalize()} not received
+3. Other {business_name_en} related questions
+
+Please let me know which option matches your question, or describe your specific issue."""
+        
+    elif request.language == "th":
+        business_name_th = "การฝากเงิน" if is_deposit else "การถอนเงิน"
+        response_text = f"""ฉันเข้าใจว่าคุณกำลังถามเกี่ยวกับ{business_name_th} คุณช่วยบอกให้ชัดเจนกว่านี้ได้ไหมว่าต้องการความช่วยเหลือเรื่องอะไร?
+
+1. วิธีการ{'ฝากเงิน' if is_deposit else 'ถอนเงิน'}?
+2. {'เงินฝาก' if is_deposit else 'เงินถอน'}ยังไม่ได้รับ
+3. คำถามอื่นๆ เกี่ยวกับ{business_name_th}
+
+กรุณาแจ้งให้ทราบว่าตัวเลือกไหนตรงกับคำถามของคุณ หรือบรรยายปัญหาเฉพาะของคุณ"""
+        
+    elif request.language == "tl":
+        business_name_tl = "deposit" if is_deposit else "withdrawal"
+        response_text = f"""Naiintindihan ko na nagtanong kayo tungkol sa {business_name_tl}. Pwede ba kayong maging mas specific sa kung anong tulong ang kailangan ninyo?
+
+1. Paano mag-{business_name_tl}?
+2. Hindi pa natatanggap ang {business_name_tl}
+3. Iba pang tanong tungkol sa {business_name_tl}
+
+Mangyaring sabihin kung alin sa mga option ang tumugma sa inyong tanong, o ilarawan ang inyong specific na isyu."""
+        
+    elif request.language == "ja":
+        business_name_ja = "入金" if is_deposit else "出金"
+        response_text = f"""{business_name_ja}についてお聞きになっていることは理解しております。どのようなサポートが必要か、もう少し具体的に教えていただけますか？
+
+1. {business_name_ja}の方法について
+2. {business_name_ja}が届いていない
+3. その他の{business_name_ja}関連の質問
+
+どの選択肢がお客様のご質問に該当するか、または具体的な問題を説明してください。"""
+        
+    else:  # 默认中文
+        response_text = f"""我理解您询问的是{business_name}相关问题。请问您具体想了解什么呢？
+
+1. 怎么{business_name}？
+2. {business_name}没到账
+3. 其他{business_name}相关问题
+
+请告诉我哪个选项符合您的问题，或者详细描述您遇到的具体情况。"""
+    
+    return ProcessingResult(
+        text=response_text,
+        stage=ResponseStage.WORKING.value,
+        transfer_human=0,
+        message_type=business_type
+    )
+
+
+async def handle_clarified_inquiry(request: MessageRequest, original_ambiguous_type: str) -> ProcessingResult:
+    """
+    处理用户澄清后的询问
+    
+    Args:
+        request: 用户请求
+        original_ambiguous_type: 原始的模糊业务类型
+        
+    Returns:
+        ProcessingResult: 处理结果
+    """
+    logger = get_logger("chatai-api")
+    
+    logger.info(f"处理澄清后的询问", extra={
+        'session_id': request.session_id,
+        'original_type': original_ambiguous_type,
+        'user_message': request.messages
+    })
+    
+    message_lower = request.messages.lower().strip()
+    is_deposit = original_ambiguous_type == "deposit_ambiguous"
+    
+    # 检查用户选择了哪个选项
+    how_to_keywords = {
+        "zh": ["1", "怎么", "如何", "方法"],
+        "en": ["1", "how to", "how do", "method"],
+        "th": ["1", "วิธีการ", "อย่างไร"],
+        "tl": ["1", "paano", "method"],
+        "ja": ["1", "方法", "どうやって"]
+    }
+    
+    not_received_keywords = {
+        "zh": ["2", "没到账", "未到账", "没收到", "没有到"],
+        "en": ["2", "not received", "haven't received", "didn't receive"],
+        "th": ["2", "ไม่ได้รับ", "ยังไม่ได้"],
+        "tl": ["2", "hindi natatanggap", "hindi pa"],
+        "ja": ["2", "届いていない", "受け取っていない"]
+    }
+    
+    other_keywords = {
+        "zh": ["3", "其他", "别的"],
+        "en": ["3", "other", "else"],
+        "th": ["3", "อื่นๆ", "อื่น"],
+        "tl": ["3", "iba", "other"],
+        "ja": ["3", "その他", "他の"]
+    }
+    
+    current_how_to = how_to_keywords.get(request.language, how_to_keywords["en"])
+    current_not_received = not_received_keywords.get(request.language, not_received_keywords["en"])
+    current_other = other_keywords.get(request.language, other_keywords["en"])
+    
+    # 选择1：怎么操作
+    if any(keyword in message_lower for keyword in current_how_to):
+        # 转人工处理操作指导
+        logger.info(f"用户选择操作指导，转人工处理", extra={
+            'session_id': request.session_id,
+            'choice': 'how_to',
+            'transfer_reason': 'user_requested_operation_guide'
+        })
+        
+        response_text = get_message_by_language({
+            "zh": f"关于如何{('充值' if is_deposit else '提现')}的操作步骤，我为您转接人工客服来详细指导。",
+            "en": f"For guidance on how to {'deposit' if is_deposit else 'withdraw'}, I'll transfer you to customer service for detailed instructions.",
+            "th": f"เพื่อคำแนะนำในการ{'ฝากเงิน' if is_deposit else 'ถอนเงิน'} ฉันจะโอนคุณไปยังฝ่ายบริการลูกค้าเพื่อคำแนะนำโดยละเอียด",
+            "tl": f"Para sa gabay kung paano mag-{'deposit' if is_deposit else 'withdraw'}, ililipat kita sa customer service para sa detalyadong tagubilin.",
+            "ja": f"{'入金' if is_deposit else '出金'}方法についてのガイダンスのため、詳細な指示についてカスタマーサービスにお繋ぎします。"
+        }, request.language)
+        
+        return ProcessingResult(
+            text=response_text,
+            stage=ResponseStage.FINISH.value,
+            transfer_human=1,
+            message_type="human_service"
+        )
+    
+    # 选择2：没到账
+    elif any(keyword in message_lower for keyword in current_not_received):
+        # 进入对应的业务流程
+        business_type = "S001" if is_deposit else "S002"
+        logger.info(f"用户选择{('充值' if is_deposit else '提现')}没到账，进入{business_type}流程", extra={
+            'session_id': request.session_id,
+            'choice': 'not_received',
+            'business_type': business_type
+        })
+        
+        # 设置请求类型并处理
+        request.type = business_type
+        return await _handle_business_process(request, business_type)
+    
+    # 选择3：其他问题
+    elif any(keyword in message_lower for keyword in current_other):
+        # 转人工处理
+        logger.info(f"用户选择其他问题，转人工处理", extra={
+            'session_id': request.session_id,
+            'choice': 'other',
+            'transfer_reason': 'user_selected_other_issues'
+        })
+        
+        response_text = get_message_by_language({
+            "zh": f"关于其他{('充值' if is_deposit else '提现')}相关问题，我为您转接人工客服来协助处理。",
+            "en": f"For other {'deposit' if is_deposit else 'withdrawal'} related questions, I'll transfer you to customer service for assistance.",
+            "th": f"สำหรับคำถามอื่นๆ ที่เกี่ยวข้องกับ{'การฝาก' if is_deposit else 'การถอน'} ฉันจะโอนคุณไปยังฝ่ายบริการลูกค้าเพื่อความช่วยเหลือ",
+            "tl": f"Para sa ibang mga tanong na related sa {'deposit' if is_deposit else 'withdrawal'}, ililipat kita sa customer service para sa tulong.",
+            "ja": f"その他の{'入金' if is_deposit else '出金'}関連のご質問については、サポートのためカスタマーサービスにお繋ぎします。"
+        }, request.language)
+        
+        return ProcessingResult(
+            text=response_text,
+            stage=ResponseStage.FINISH.value,
+            transfer_human=1,
+            message_type="human_service"
+        )
+    
+    # 用户没有明确选择，再次识别是否是没到账的查询
+    else:
+        # 用第二次识别来判断是否是到账查询
+        logger.info(f"用户回复不明确，进行第二次识别", extra={
+            'session_id': request.session_id,
+            'user_message': request.messages
+        })
+        
+        # 检查是否包含"没到账"相关的表达
+        not_received_extended = {
+            "zh": ["没到账", "未到账", "没收到", "没有到", "到账", "收到", "状态", "查询", "订单"],
+            "en": ["not received", "haven't received", "didn't receive", "received", "status", "check", "order"],
+            "th": ["ไม่ได้รับ", "ยังไม่ได้", "ได้รับ", "สถานะ", "ตรวจสอบ"],
+            "tl": ["hindi natatanggap", "hindi pa", "natatanggap", "status", "check"],
+            "ja": ["届いていない", "受け取っていない", "届いた", "状況", "確認"]
+        }
+        
+        current_extended = not_received_extended.get(request.language, not_received_extended["en"])
+        if any(keyword in message_lower for keyword in current_extended):
+            # 识别为到账查询，进入对应流程
+            business_type = "S001" if is_deposit else "S002"
+            logger.info(f"第二次识别为{('充值' if is_deposit else '提现')}到账查询，进入{business_type}流程", extra={
+                'session_id': request.session_id,
+                'business_type': business_type,
+                'matched_keywords': [kw for kw in current_extended if kw in message_lower]
+            })
+            
+            request.type = business_type
+            return await _handle_business_process(request, business_type)
+        else:
+            # 仍然不明确，转人工
+            logger.info(f"第二次识别仍不明确，转人工处理", extra={
+                'session_id': request.session_id,
+                'transfer_reason': 'unclear_after_second_identification'
+            })
+            
+            response_text = get_message_by_language({
+                "zh": f"抱歉，我没有完全理解您的{('充值' if is_deposit else '提现')}问题，已为您转接人工客服来协助解决。",
+                "en": f"Sorry, I didn't fully understand your {'deposit' if is_deposit else 'withdrawal'} question. I've transferred you to customer service for assistance.",
+                "th": f"ขออภัย ฉันไม่เข้าใจคำถามเกี่ยวกับ{'การฝาก' if is_deposit else 'การถอน'}ของคุณทั้งหมด ฉันได้โอนคุณไปยังฝ่ายบริการลูกค้าเพื่อความช่วยเหลือแล้ว",
+                "tl": f"Pasensya na, hindi ko lubos na naintindihan ang inyong tanong tungkol sa {'deposit' if is_deposit else 'withdrawal'}. Na-transfer na kayo sa customer service para sa tulong.",
+                "ja": f"申し訳ございませんが、お客様の{'入金' if is_deposit else '出金'}に関するご質問を完全に理解できませんでした。サポートのためカスタマーサービスにお繋ぎいたします。"
+            }, request.language)
+            
+            return ProcessingResult(
+                text=response_text,
+                stage=ResponseStage.FINISH.value,
+                transfer_human=1,
+                message_type="human_service"
+            )

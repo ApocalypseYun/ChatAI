@@ -149,7 +149,7 @@ def extract_recharge_status(response: Dict[str, Any]) -> Dict[str, Any]:
             'full_response': response,
             'state': response.get('state'),
             'data': response.get('data'),
-            'message': response.get('message')
+            'api_message': response.get('message')
         })
         
         # 检查基本的响应结构
@@ -166,7 +166,7 @@ def extract_recharge_status(response: Dict[str, Any]) -> Dict[str, Any]:
         
         # 如果state不是0，表示API调用失败
         if state != 0:
-            logger.info(f"API调用失败，state={state}", extra={'state': state, 'message': response.get('message')})
+            logger.info(f"API调用失败，state={state}", extra={'state': state, 'api_message': response.get('message')})
             return {
                 "status": "api_failed",
                 "is_success": False,
