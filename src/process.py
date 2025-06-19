@@ -415,32 +415,62 @@ async def _build_response(request: MessageRequest, result: ProcessingResult, sta
     # 语言保障机制：在最终返回前，统一用目标语言重新生成回复
     final_response_text = result.text
     if result.text and not result.transfer_human:  # 只有非转人工的情况才需要语言保障
-        try:
-            # 构建prompt来确保语言正确性
-            language_guarantee_prompt = build_reply_with_prompt(
-                request.history or [], 
-                request.messages, 
-                result.text, 
-                request.language
-            )
-            # 调用AI模型重新生成，确保语言正确
-            final_response_text = await call_openapi_model(prompt=language_guarantee_prompt)
-            
-            logger.debug(f"语言保障机制已执行", extra={
+        # 检查是否是状态查询结果，如果是则跳过语言保障
+        status_keywords = [
+            # 英文
+            "successful", "canceled", "cancelled", "pending", "failed", "processing", "issue", "problem", "transferred", "completed",
+            # 中文
+            "成功", "取消", "处理中", "失败", "问题", "已取消", "已成功", "正在处理", "转接", "完成",
+            # 泰语
+            "สำเร็จ", "ยกเลิก", "ดำเนินการ", "ล้มเหลว", "ปัญหา", "กำลังดำเนินการ", "ถูกยกเลิก", "เสร็จสิ้น", 
+            "โอนไปยัง", "ชำระเงิน", "ถอนเงิน", "เติมเงิน", "การชำระ", "การถอน", "การเติม",
+            # 菲律宾语  
+            "matagumpay", "nakansela", "pinoproseso", "nabigo", "problema", "na-transfer", "withdrawal", "bayad",
+            "recharge", "deposit", "processing", "completed", "kumpletong"
+        ]
+        
+        is_status_result = (
+            result.stage == ResponseStage.FINISH.value and 
+            response_type in [BusinessType.RECHARGE_QUERY.value, BusinessType.WITHDRAWAL_QUERY.value] and
+            any(keyword in result.text for keyword in status_keywords)
+        )
+        
+        if is_status_result:
+            # 状态查询结果已经是准确的信息，不需要语言保障
+            logger.debug(f"跳过语言保障：状态查询结果", extra={
                 'session_id': request.session_id,
-                'target_language': request.language,
-                'original_length': len(result.text),
-                'final_length': len(final_response_text),
-                'applied_language_guarantee': True
-            })
-        except Exception as e:
-            # 如果语言保障失败，使用原始回复
-            logger.warning(f"语言保障机制执行失败，使用原始回复", extra={
-                'session_id': request.session_id,
-                'error': str(e),
-                'fallback_to_original': True
+                'response_type': response_type,
+                'result_stage': result.stage,
+                'skip_language_guarantee': True
             })
             final_response_text = result.text
+        else:
+            try:
+                # 构建prompt来确保语言正确性
+                language_guarantee_prompt = build_reply_with_prompt(
+                    request.history or [], 
+                    request.messages, 
+                    result.text, 
+                    request.language
+                )
+                # 调用AI模型重新生成，确保语言正确
+                final_response_text = await call_openapi_model(prompt=language_guarantee_prompt)
+                
+                logger.debug(f"语言保障机制已执行", extra={
+                    'session_id': request.session_id,
+                    'target_language': request.language,
+                    'original_length': len(result.text),
+                    'final_length': len(final_response_text),
+                    'applied_language_guarantee': True
+                })
+            except Exception as e:
+                # 如果语言保障失败，使用原始回复
+                logger.warning(f"语言保障机制执行失败，使用原始回复", extra={
+                    'session_id': request.session_id,
+                    'error': str(e),
+                    'fallback_to_original': True
+                })
+                final_response_text = result.text
     
     logger.debug(f"构建最终响应", extra={
         'session_id': request.session_id,
