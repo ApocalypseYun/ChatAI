@@ -85,7 +85,7 @@ async def process_message(request: MessageRequest) -> MessageResponse:
         result = await _process_authenticated_user(request)
         
         # 构建响应
-        response = _build_response(request, result, start_time)
+        response = await _build_response(request, result, start_time)
         
         logger.info(f"会话处理完成", extra={
             'session_id': request.session_id,
@@ -236,7 +236,7 @@ async def _get_or_identify_business_type(request: MessageRequest) -> str:
     # 进行意图识别
     logger.debug(f"未指定业务类型，开始意图识别", extra={
         'session_id': request.session_id,
-        'message': str(request.messages)[:100] + '...' if len(str(request.messages)) > 100 else str(request.messages)
+        'user_message': str(request.messages)[:100] + '...' if len(str(request.messages)) > 100 else str(request.messages)
     })
     
     message_type = await identify_intent(
@@ -282,9 +282,6 @@ async def _handle_human_service_request(request: MessageRequest, message_type: s
             'transfer_reason': transfer_reason
         })
         response_text = "抱歉，我无法理解您的问题，已为您转接人工客服。"
-    
-    prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
-    response_text = await call_openapi_model(prompt=prompt)
     
     return ProcessingResult(
         text=response_text,
@@ -383,29 +380,60 @@ async def _handle_stage_zero(request: MessageRequest, message_type: str, status_
         return await handle_chat_service(request)
 
 
-def _build_response(request: MessageRequest, result: ProcessingResult, start_time: float) -> MessageResponse:
+async def _build_response(request: MessageRequest, result: ProcessingResult, start_time: float) -> MessageResponse:
     """构建最终响应"""
     conversation_rounds = len(request.history or []) // 2
     
     # 优先使用request.type，如果没有则使用result.message_type
     response_type = request.type if request.type is not None and request.type != "" else result.message_type
     
+    # 语言保障机制：在最终返回前，统一用目标语言重新生成回复
+    final_response_text = result.text
+    if result.text and not result.transfer_human:  # 只有非转人工的情况才需要语言保障
+        try:
+            # 构建prompt来确保语言正确性
+            language_guarantee_prompt = build_reply_with_prompt(
+                request.history or [], 
+                request.messages, 
+                result.text, 
+                request.language
+            )
+            # 调用AI模型重新生成，确保语言正确
+            final_response_text = await call_openapi_model(prompt=language_guarantee_prompt)
+            
+            logger.debug(f"语言保障机制已执行", extra={
+                'session_id': request.session_id,
+                'target_language': request.language,
+                'original_length': len(result.text),
+                'final_length': len(final_response_text),
+                'applied_language_guarantee': True
+            })
+        except Exception as e:
+            # 如果语言保障失败，使用原始回复
+            logger.warning(f"语言保障机制执行失败，使用原始回复", extra={
+                'session_id': request.session_id,
+                'error': str(e),
+                'fallback_to_original': True
+            })
+            final_response_text = result.text
+    
     logger.debug(f"构建最终响应", extra={
         'session_id': request.session_id,
         'response_stage': result.stage,
         'transfer_human': result.transfer_human,
         'has_images': bool(result.images),
-        'response_length': len(result.text),
+        'response_length': len(final_response_text),
         'conversation_rounds': conversation_rounds,
         'request_type': request.type,
         'result_message_type': result.message_type,
-        'final_type': response_type
+        'final_type': response_type,
+        'target_language': request.language
     })
     
     return MessageResponse(
         session_id=request.session_id,
         status="success",
-        response=result.text,
+        response=final_response_text,
         stage=result.stage,
         images=result.images,
         metadata={
@@ -414,7 +442,8 @@ def _build_response(request: MessageRequest, result: ProcessingResult, start_tim
             "conversation_rounds": conversation_rounds,
             "max_rounds": Constants.MAX_CONVERSATION_ROUNDS,
             "has_preset_type": request.type is not None,
-            "processing_time": round(time.time() - start_time, 3)
+            "processing_time": round(time.time() - start_time, 3),
+            "language_guaranteed": True  # 标记已应用语言保障机制
         },
         site=request.site,
         type=response_type,
@@ -453,14 +482,11 @@ class StageHandler:
         stage_response = step_info.get("response", {})
         stage_text = stage_response.get("text") or step_info.get("step", "")
         
-        prompt = build_reply_with_prompt(request.history or [], request.messages, stage_text, request.language)
-        response_text = await call_openapi_model(prompt=prompt)
-        
         stage_images = stage_response.get("images", [])
         response_stage = ResponseStage.WORKING.value if stage_number in ["1", "2"] else ResponseStage.FINISH.value
         
         result = ProcessingResult(
-            text=response_text,
+            text=stage_text,
             images=stage_images,
             stage=response_stage,
             message_type=message_type
@@ -614,12 +640,8 @@ async def _process_recharge_status(status: str, status_messages: Dict, workflow:
         stage_4_info = workflow.get("4", {})
         response_images = stage_4_info.get("response", {}).get("images", [])
     
-    # 生成最终回复
-    prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
-    final_text = await call_openapi_model(prompt=prompt)
-    
     result = ProcessingResult(
-        text=final_text,
+        text=response_text,
         images=response_images,
         stage=stage,
         transfer_human=transfer_human
@@ -762,12 +784,8 @@ async def _process_withdrawal_status(status: str, status_messages: Dict, workflo
         stage_4_info = workflow.get("4", {})
         response_images = stage_4_info.get("response", {}).get("images", [])
     
-    # 生成最终回复
-    prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
-    final_text = await call_openapi_model(prompt=prompt)
-    
     result = ProcessingResult(
-        text=final_text,
+        text=response_text,
         images=response_images,
         stage=stage,
         transfer_human=transfer_human
@@ -837,10 +855,8 @@ async def _handle_activity_query(request: MessageRequest, status_messages: Dict)
             # 系统错误，转人工
             response_text = error_message
             
-        prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
-        final_text = await call_openapi_model(prompt=prompt)
         return ProcessingResult(
-            text=final_text,
+            text=response_text,
             transfer_human=1 if error_type == "system" else 0,
             stage=ResponseStage.FINISH.value if error_type == "system" else ResponseStage.WORKING.value,
             message_type=BusinessType.ACTIVITY_QUERY.value
@@ -852,10 +868,8 @@ async def _handle_activity_query(request: MessageRequest, status_messages: Dict)
             status_messages.get("query_failed", {}), 
             request.language
         )
-        prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
-        final_text = await call_openapi_model(prompt=prompt)
         return ProcessingResult(
-            text=final_text,
+            text=response_text,
             transfer_human=1,
             stage=ResponseStage.FINISH.value,
             message_type=BusinessType.ACTIVITY_QUERY.value
@@ -875,10 +889,8 @@ async def _handle_activity_query(request: MessageRequest, status_messages: Dict)
             status_messages.get("no_activities", {}), 
             request.language
         )
-        prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
-        final_text = await call_openapi_model(prompt=prompt)
         result = ProcessingResult(
-            text=final_text,
+            text=response_text,
             stage=ResponseStage.FINISH.value,
             message_type=BusinessType.ACTIVITY_QUERY.value
         )
@@ -1045,8 +1057,6 @@ async def _handle_unclear_activity(request: MessageRequest, status_messages: Dic
             request.language
         )
         response_text = f"{base_message}\n{activity_list_text}"
-        prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
-        response_text = await call_openapi_model(prompt=prompt)
     
     return ProcessingResult(
         text=response_text,
@@ -1161,12 +1171,8 @@ async def _request_activity_confirmation(request: MessageRequest, user_input: st
             confirmation_text += f"{i}. {activity}\n"
         confirmation_text += "\n请问其中有您要查询的活动吗？请明确指出是哪一个。"
     
-    # 生成更自然的回复
-    prompt = build_reply_with_prompt(request.history or [], request.messages, confirmation_text, request.language)
-    response_text = await call_openapi_model(prompt=prompt)
-    
     return ProcessingResult(
-        text=response_text,
+        text=confirmation_text,
         stage=ResponseStage.WORKING.value,
         transfer_human=0,
         message_type=BusinessType.ACTIVITY_QUERY.value
@@ -1245,12 +1251,8 @@ async def _process_activity_eligibility(eligibility_data: Dict, status_messages:
     else:
         response_text = base_message
     
-    # 生成最终回复
-    prompt = build_reply_with_prompt(request.history or [], request.messages, response_text, request.language)
-    final_text = await call_openapi_model(prompt=prompt)
-    
     result = ProcessingResult(
-        text=final_text,
+        text=response_text,
         stage=stage,
         transfer_human=transfer_human,
         message_type=BusinessType.ACTIVITY_QUERY.value
@@ -1405,7 +1407,7 @@ Mangyaring tumugon lamang ng "normal_chat" o "inappropriate".
     except Exception as e:
         logger.error(f"消息类型识别失败", extra={
             'error': str(e),
-            'message': messages[:100]
+            'user_message': messages[:100]
         })
         # 默认返回normal_chat，避免误判
         return "normal_chat"
@@ -1472,7 +1474,7 @@ async def identify_customer_service_question(messages: str, language: str) -> st
     for keyword in ai_handled_keywords:
         if keyword.lower() in message_lower:
             logger.info(f"识别为AI可处理的问题", extra={
-                'message': messages[:100],
+                'user_message': messages[:100],
                 'matched_keyword': keyword
             })
             return "ai_handled"
@@ -1618,7 +1620,7 @@ Tumuon sa intent sa likod ng mensahe, hindi lang sa mga keyword.
             for keyword in customer_service_keywords:
                 if keyword.lower() in message_lower:
                     logger.info(f"通过关键词识别为客服问题", extra={
-                        'message': messages[:100],
+                        'user_message': messages[:100],
                         'matched_keyword': keyword
                     })
                     return "customer_service"
@@ -1628,7 +1630,7 @@ Tumuon sa intent sa likod ng mensahe, hindi lang sa mga keyword.
     except Exception as e:
         logger.error(f"客服问题识别失败", extra={
             'error': str(e),
-            'message': messages[:100]
+            'user_message': messages[:100]
         })
         # 默认返回normal_chat，避免误判
         return "normal_chat"
@@ -1754,68 +1756,78 @@ async def handle_chat_service(request: MessageRequest) -> ProcessingResult:
     # 构建闲聊回复的prompt
     if request.language == "en":
         chat_prompt = f"""
-You are a friendly customer service assistant. The user is having a casual conversation with you. Please provide a warm, helpful response to their message and then ask if there's anything you can help them with.
+You are a friendly customer service assistant. The user is having a casual conversation with you. Please provide a warm, helpful response to their message.
 
 User message: {request.messages}
 
-Please respond naturally to their message first, then end with asking "Is there anything I can help you with?"
-
-Keep your response friendly, concise, and professional.
+Please respond naturally to their message. Keep your response friendly, concise, and professional.
+DO NOT add any question like "Is there anything I can help you with?" at the end - we will handle that separately.
 """
     elif request.language == "th":
         chat_prompt = f"""
-คุณเป็นผู้ช่วยบริการลูกค้าที่เป็นมิตร ผู้ใช้กำลังสนทนาสบายๆ กับคุณ กรุณาให้การตอบกลับที่อบอุ่นและเป็นประโยชน์ต่อข้อความของพวกเขา จากนั้นถามว่ามีอะไรที่คุณสามารถช่วยได้หรือไม่
+คุณเป็นผู้ช่วยบริการลูกค้าที่เป็นมิตร ผู้ใช้กำลังสนทนาสบายๆ กับคุณ กรุณาให้การตอบกลับที่อบอุ่นและเป็นประโยชน์ต่อข้อความของพวกเขา
 
 ข้อความของผู้ใช้: {request.messages}
 
-กรุณาตอบสนองต่อข้อความของพวกเขาอย่างเป็นธรรมชาติก่อน จากนั้นจบด้วยการถาม "มีอะไรที่ฉันช่วยคุณได้ไหม?"
-
-ให้การตอบกลับของคุณเป็นมิตร กระชับ และเป็นมืออาชีพ
+กรุณาตอบสนองต่อข้อความของพวกเขาอย่างเป็นธรรมชาติ ให้การตอบกลับของคุณเป็นมิตร กระชับ และเป็นมืออาชีพ
+อย่าเพิ่มคำถามเช่น "มีอะไรที่ฉันช่วยคุณได้ไหม?" ต่อท้าย - เราจะจัดการส่วนนั้นแยกต่างหาก
 """
     elif request.language == "tl":
         chat_prompt = f"""
-Ikaw ay isang friendly na customer service assistant. Ang user ay nakikipag-casual conversation sa iyo. Mangyaring magbigay ng mainit at nakakatulong na tugon sa kanilang mensahe at tanungin kung may maitutulong ka.
+Ikaw ay isang friendly na customer service assistant. Ang user ay nakikipag-casual conversation sa iyo. Mangyaring magbigay ng mainit at nakakatulong na tugon sa kanilang mensahe.
 
 Mensahe ng user: {request.messages}
 
-Mangyaring tumugon nang natural sa kanilang mensahe muna, tapos tapusin sa pagtatanong ng "May maitutulong ba ako sa inyo?"
-
-Panatilihin ang inyong tugon na friendly, concise, at professional.
+Mangyaring tumugon nang natural sa kanilang mensahe. Panatilihin ang inyong tugon na friendly, concise, at professional.
+HUWAG magdagdag ng tanong tulad ng "May maitutulong ba ako sa inyo?" sa dulo - hahawakin namin yun hiwalay.
 """
     elif request.language == "ja":
         chat_prompt = f"""
-あなたは親しみやすいカスタマーサービスアシスタントです。ユーザーはあなたとカジュアルな会話をしています。彼らのメッセージに温かく有用な回答を提供し、何かお手伝いできることがあるかを尋ねてください。
+あなたは親しみやすいカスタマーサービスアシスタントです。ユーザーはあなたとカジュアルな会話をしています。彼らのメッセージに温かく有用な回答を提供してください。
 
 ユーザーメッセージ: {request.messages}
 
-まず彼らのメッセージに自然に応答し、最後に「何かお手伝いできることはありますか？」と尋ねて終わってください。
-
-回答は親しみやすく、簡潔で、プロフェッショナルに保ってください。
+彼らのメッセージに自然に応答してください。回答は親しみやすく、簡潔で、プロフェッショナルに保ってください。
+最後に「何かお手伝いできることはありますか？」のような質問を追加しないでください - それは別途処理します。
 """
     else:  # 默认中文
         chat_prompt = f"""
-你是一个友好的客服助手。用户正在与你进行闲聊对话。请对他们的消息提供温暖、有帮助的回复，然后询问有什么可以帮助他们的。
+你是一个友好的客服助手。用户正在与你进行闲聊对话。请对他们的消息提供温暖、有帮助的回复。
 
 用户消息：{request.messages}
 
-请首先自然地回应他们的消息，然后以询问"有什么问题要帮您的？"结尾。
-
-保持你的回复友好、简洁、专业。
+请自然地回应他们的消息。保持你的回复友好、简洁、专业。
+不要在结尾添加"有什么问题要帮您的？"之类的询问 - 我们会单独处理那部分。
 """
     
     try:
         response_text = await call_openapi_model(prompt=chat_prompt)
         
-        # 确保回复以询问结尾
-        help_question = get_message_by_language({
-            "zh": "有什么问题要帮您的？",
-            "en": "Is there anything I can help you with?",
-            "th": "มีอะไรที่ฉันช่วยคุณได้ไหม?",
-            "tl": "May maitutulong ba ako sa inyo?",
-            "ja": "何かお手伝いできることはありますか？"
-        }, request.language)
+        # 添加询问，但要智能地检查是否已经包含
+        help_questions = {
+            "zh": ["有什么问题要帮您的？", "有什么可以帮助您的吗？", "还有其他问题吗？"],
+            "en": ["Is there anything I can help you with?", "Can I help you with anything else?", "Do you have any other questions?"],
+            "th": ["มีอะไรที่ฉันช่วยคุณได้ไหม?", "มีอะไรอื่นที่ฉันช่วยได้ไหม?", "คุณมีคำถามอื่นไหม?"],
+            "tl": ["May maitutulong ba ako sa inyo?", "May iba pa bang maitutulong ko?", "May iba pa bang tanong?"],
+            "ja": ["何かお手伝いできることはありますか？", "他に何かお手伝いできることはありますか？", "他にご質問はありますか？"]
+        }
         
-        if not any(keyword in response_text for keyword in ["有什么问题要帮您的", "Is there anything I can help you with", "มีอะไรที่ฉันช่วยคุณได้ไหม", "May maitutulong ba ako sa inyo", "何かお手伝いできることはありますか"]):
+        # 检查回复是否已经包含类似的询问
+        current_questions = help_questions.get(request.language, help_questions["zh"])
+        already_has_question = any(
+            question.lower() in response_text.lower() or
+            any(word in response_text.lower() for word in question.lower().split() if len(word) > 2)
+            for question in current_questions
+        )
+        
+        if not already_has_question:
+            help_question = get_message_by_language({
+                "zh": "有什么问题要帮您的？",
+                "en": "Is there anything I can help you with?",
+                "th": "มีอะไรที่ฉันช่วยคุณได้ไหม?",
+                "tl": "May maitutulong ba ako sa inyo?",
+                "ja": "何かお手伝いできることはありますか？"
+            }, request.language)
             response_text = f"{response_text} {help_question}"
         
         return ProcessingResult(

@@ -347,7 +347,7 @@ Please respond with only "NO" if the user has more questions or the intent is un
     except Exception as e:
         logger.error(f"用户满意度识别失败", extra={
             'error': str(e),
-            'message': messages[:100]
+            'user_message': messages[:100]
         })
         # 默认返回False，保持对话继续
         return False
