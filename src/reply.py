@@ -39,7 +39,7 @@ def get_follow_up_message(language: str) -> str:
     }
     return get_message_by_language(messages, language)
 
-def build_reply_with_prompt(history, current_messages, stage_response_text, language):
+def build_reply_with_prompt(history, current_messages, stage_response_text, language, is_status_result=False):
     """
     根据历史、当前消息、阶段response中的text和目标语言，构建prompt让AI生成一句回复
     Args:
@@ -57,74 +57,154 @@ def build_reply_with_prompt(history, current_messages, stage_response_text, lang
     
     # 根据语言构建不同的prompt
     if language == "zh":
-        prompt = f"""
+        if is_status_result:
+            prompt = f"""
+你是一个智能客服助理。用户查询了业务状态，系统已经返回了准确的状态信息。
+
+用户当前消息：\n{current}\n
+
+系统返回的状态信息：\n{stage_response_text}\n
+
+重要说明：
+1. 系统返回的状态信息是准确的业务查询结果，必须保持原意不变
+2. 只能在语言表达上进行优化，确保自然流畅的中文表达
+3. 不要改变状态信息的核心内容，不要添加额外的业务解释
+4. 保持回复简洁专业
+
+请用自然流畅的中文重新表达这个状态信息，保持原意不变。"""
+        else:
+            prompt = f"""
 你是一个智能客服助理，请根据历史对话、用户当前消息和系统建议回复内容，生成一句自然、简洁且符合中文语言习惯的回复。
 
 历史消息：
 """
-        for turn in history:
-            role = turn.get("role", "user")
-            content = turn.get("content", "")
-            prompt += f"{role}: {content}\n"
-        prompt += f"\n用户当前消息：\n{current}\n"
-        prompt += f"\n系统建议回复内容：\n{stage_response_text}\n"
-        prompt += f"\n请用中文生成一句自然回复。"
+            for turn in history:
+                role = turn.get("role", "user")
+                content = turn.get("content", "")
+                prompt += f"{role}: {content}\n"
+            prompt += f"\n用户当前消息：\n{current}\n"
+            prompt += f"\n系统建议回复内容：\n{stage_response_text}\n"
+            prompt += f"\n请用中文生成一句自然回复。"
     
     elif language == "en":
-        prompt = f"""
+        if is_status_result:
+            prompt = f"""
+You are an intelligent customer service assistant. The user queried a business status, and the system has returned accurate status information.
+
+Current User Message:\n{current}\n
+
+System Status Information:\n{stage_response_text}\n
+
+Important Instructions:
+1. The system status information is accurate business query result and must maintain its original meaning
+2. Only optimize the language expression to ensure natural and fluent English
+3. Do not change the core content of the status information or add extra business explanations
+4. Keep the response concise and professional
+
+Please reword this status information in natural, fluent English while maintaining the original meaning."""
+        else:
+            prompt = f"""
 You are an intelligent customer service assistant. Based on the chat history, current user message, and system suggested reply content, generate a natural, concise response that follows English language conventions.
 
 Chat History:
 """
-        for turn in history:
-            role = turn.get("role", "user")
-            content = turn.get("content", "")
-            prompt += f"{role}: {content}\n"
-        prompt += f"\nCurrent User Message:\n{current}\n"
-        prompt += f"\nSystem Suggested Reply:\n{stage_response_text}\n"
-        prompt += f"\nPlease generate a natural reply in English."
+            for turn in history:
+                role = turn.get("role", "user")
+                content = turn.get("content", "")
+                prompt += f"{role}: {content}\n"
+            prompt += f"\nCurrent User Message:\n{current}\n"
+            prompt += f"\nSystem Suggested Reply:\n{stage_response_text}\n"
+            prompt += f"\nPlease generate a natural reply in English."
     
     elif language == "th":
-        prompt = f"""
+        if is_status_result:
+            prompt = f"""
+คุณเป็นผู้ช่วยฝ่ายบริการลูกค้าอัจฉริยะ ผู้ใช้ได้สอบถามสถานะทางธุรกิจและระบบได้ส่งคืนข้อมูลสถานะที่ถูกต้องแล้ว
+
+ข้อความปัจจุบันของผู้ใช้:\n{current}\n
+
+ข้อมูลสถานะจากระบบ:\n{stage_response_text}\n
+
+คำแนะนำสำคัญ:
+1. ข้อมูลสถานะจากระบบเป็นผลการสอบถามทางธุรกิจที่ถูกต้องและต้องรักษาความหมายเดิมไว้
+2. ปรับปรุงการแสดงออกทางภาษาเท่านั้นเพื่อให้เป็นภาษาไทยที่เป็นธรรมชาติและคล่องแคล่ว
+3. อย่าเปลี่ยนเนื้อหาหลักของข้อมูลสถานะหรือเพิ่มคำอธิบายทางธุรกิจเพิ่มเติม
+4. รักษาการตอบกลับให้กระชับและเป็นมืออาชีพ
+
+โปรดแสดงข้อมูลสถานะนี้ใหม่ในภาษาไทยที่เป็นธรรมชาติและคล่องแคล่วโดยรักษาความหมายเดิมไว้"""
+        else:
+            prompt = f"""
 คุณเป็นผู้ช่วยฝ่ายบริการลูกค้าอัจฉริยะ โปรดใช้ประวัติการสนทนา ข้อความปัจจุบันของผู้ใช้ และเนื้อหาการตอบกลับที่ระบบแนะนำ เพื่อสร้างการตอบกลับที่เป็นธรรมชาติ กระชับ และเป็นไปตามธรรมเนียมภาษาไทย
 
 ประวัติการสนทนา:
 """
-        for turn in history:
-            role = turn.get("role", "user")
-            content = turn.get("content", "")
-            prompt += f"{role}: {content}\n"
-        prompt += f"\nข้อความปัจจุบันของผู้ใช้:\n{current}\n"
-        prompt += f"\nการตอบกลับที่ระบบแนะนำ:\n{stage_response_text}\n"
-        prompt += f"\nโปรดสร้างการตอบกลับที่เป็นธรรมชาติเป็นภาษาไทย"
+            for turn in history:
+                role = turn.get("role", "user")
+                content = turn.get("content", "")
+                prompt += f"{role}: {content}\n"
+            prompt += f"\nข้อความปัจจุบันของผู้ใช้:\n{current}\n"
+            prompt += f"\nการตอบกลับที่ระบบแนะนำ:\n{stage_response_text}\n"
+            prompt += f"\nโปรดสร้างการตอบกลับที่เป็นธรรมชาติเป็นภาษาไทย"
     
     elif language == "tl":
-        prompt = f"""
+        if is_status_result:
+            prompt = f"""
+Ikaw ay isang matalinong customer service assistant. Ang user ay nagtanong tungkol sa business status at ang system ay nagbalik ng tumpak na status information.
+
+Kasalukuyang Mensahe ng User:\n{current}\n
+
+Status Information mula sa System:\n{stage_response_text}\n
+
+Mahalagang Instructions:
+1. Ang status information mula sa system ay tumpak na business query result at dapat panatilihin ang orihinal na kahulugan
+2. I-optimize lang ang pagpapahayag ng wika para masigurong natural at daloy na Filipino
+3. Huwag baguhin ang pangunahing nilalaman ng status information o magdagdag ng karagdagang business explanations
+4. Panatilihin ang tugon na maikli at propesyonal
+
+Pakisulat muli ang status information na ito sa natural at daloy na Filipino habang pinapanatili ang orihinal na kahulugan."""
+        else:
+            prompt = f"""
 Ikaw ay isang matalinong customer service assistant. Batay sa kasaysayan ng chat, kasalukuyang mensahe ng user, at iminungkahing sagot ng system, bumuo ng natural, maikling sagot na sumusunod sa mga kaugalian ng wikang Filipino.
 
 Kasaysayan ng Chat:
 """
-        for turn in history:
-            role = turn.get("role", "user")
-            content = turn.get("content", "")
-            prompt += f"{role}: {content}\n"
-        prompt += f"\nKasalukuyang Mensahe ng User:\n{current}\n"
-        prompt += f"\nIminungkahing Sagot ng System:\n{stage_response_text}\n"
-        prompt += f"\nPakibuo ang natural na sagot sa wikang Filipino."
+            for turn in history:
+                role = turn.get("role", "user")
+                content = turn.get("content", "")
+                prompt += f"{role}: {content}\n"
+            prompt += f"\nKasalukuyang Mensahe ng User:\n{current}\n"
+            prompt += f"\nIminungkahing Sagot ng System:\n{stage_response_text}\n"
+            prompt += f"\nPakibuo ang natural na sagot sa wikang Filipino."
     
     elif language == "ja":
-        prompt = f"""
+        if is_status_result:
+            prompt = f"""
+あなたは知能的なカスタマーサービスアシスタントです。ユーザーがビジネスステータスを照会し、システムが正確なステータス情報を返しました。
+
+現在のユーザーメッセージ:\n{current}\n
+
+システムからのステータス情報:\n{stage_response_text}\n
+
+重要な指示:
+1. システムからのステータス情報は正確なビジネス照会結果であり、元の意味を保持する必要があります
+2. 自然で流暢な日本語表現になるよう言語表現のみを最適化してください
+3. ステータス情報の核心的な内容を変更したり、追加のビジネス説明を加えたりしないでください
+4. 回答は簡潔でプロフェッショナルに保ってください
+
+元の意味を保ちながら、このステータス情報を自然で流暢な日本語で言い換えてください。"""
+        else:
+            prompt = f"""
 あなたは知能的なカスタマーサービスアシスタントです。チャット履歴、現在のユーザーメッセージ、システム推奨返信内容に基づいて、日本語の言語習慣に従った自然で簡潔な返信を生成してください。
 
 チャット履歴:
 """
-        for turn in history:
-            role = turn.get("role", "user")
-            content = turn.get("content", "")
-            prompt += f"{role}: {content}\n"
-        prompt += f"\n現在のユーザーメッセージ:\n{current}\n"
-        prompt += f"\nシステム推奨返信:\n{stage_response_text}\n"
-        prompt += f"\n日本語で自然な返信を生成してください。"
+            for turn in history:
+                role = turn.get("role", "user")
+                content = turn.get("content", "")
+                prompt += f"{role}: {content}\n"
+            prompt += f"\n現在のユーザーメッセージ:\n{current}\n"
+            prompt += f"\nシステム推奨返信:\n{stage_response_text}\n"
+            prompt += f"\n日本語で自然な返信を生成してください。"
     
     else:
         # 默认使用英文
