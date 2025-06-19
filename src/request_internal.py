@@ -108,11 +108,12 @@ async def query_activity_list(session_id: str, site: int = 1) -> Dict[str, Any]:
 
 
 # A004 活动 - 查询用户条件是否满足领取需求
-async def query_user_eligibility(session_id: str, site: int = 1) -> Dict[str, Any]:
+async def query_user_eligibility(session_id: str, active_name: str, site: int = 1) -> Dict[str, Any]:
     """
     查询用户条件是否满足领取需求
     参数：
         session_id: 会话ID
+        active_name: 活动名称
         site: 站点ID，默认为1
     返回：
         接口响应 JSON
@@ -122,7 +123,9 @@ async def query_user_eligibility(session_id: str, site: int = 1) -> Dict[str, An
         "site": site,
         "session_id": session_id,
         "code": "A004",
-        "params": {}
+        "params": {
+            "activeName": active_name
+        }
     }
     encrypted_data = encrypt_payload(payload)
     headers = {"Content-Type": "application/json"}

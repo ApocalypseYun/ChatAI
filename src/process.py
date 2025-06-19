@@ -893,51 +893,45 @@ async def _identify_and_query_activity(request: MessageRequest, all_activities: 
     identified_activity = await _identify_user_activity(request, activity_list_text)
     
     # 处理识别结果
-    if identified_activity.strip().lower() == "unclear" or identified_activity.strip() not in all_activities:
-        # 基于category提供更精准的错误处理
-        if request.category:
-            category_value = list(request.category.values())[0] if request.category else None
-            
-            # 如果是特殊的不需要活动识别的情况，直接返回错误
-            special_cases = [
-                "Check agent commission", 
-                "Check rebate bonus", 
-                "Check spin promotion", 
-                "Check VIP salary"
-            ]
-            
-            if category_value in special_cases:
-                # 这些情况应该由意图识别阶段处理，不应该到达这里
-                response_text = get_message_by_language(
-                    status_messages.get("activity_not_found", {}), 
-                    request.language
-                )
-                return ProcessingResult(
-                    text=response_text,
-                    stage=ResponseStage.WORKING.value,
-                    transfer_human=0,
-                    message_type=BusinessType.ACTIVITY_QUERY.value
-                )
-        
-        # 检查是否用户提供了具体的活动名称但找不到
-        user_message = request.messages.strip()
-        if len(user_message) > 10:  # 用户提供了较长的描述，可能是具体活动名称
-            # 返回活动找不到的错误，让用户提供正确信息
-            response_text = get_message_by_language(
-                status_messages.get("activity_not_found", {}), 
-                request.language
-            )
-            return ProcessingResult(
-                text=response_text,
-                stage=ResponseStage.WORKING.value,
-                transfer_human=0,
-                message_type=BusinessType.ACTIVITY_QUERY.value
-            )
-        else:
-            return await _handle_unclear_activity(request, status_messages, activity_list_text)
+    if identified_activity.strip().lower() == "unclear":
+        return await _handle_unclear_activity(request, status_messages, activity_list_text)
     
-    # 查询用户资格
-    return await _query_user_activity_eligibility(request, identified_activity.strip(), status_messages)
+    # 检查活动是否在列表中（精确匹配）
+    exact_match = None
+    for activity in all_activities:
+        if identified_activity.strip() == activity:
+            exact_match = activity
+            break
+    
+    if exact_match:
+        # 精确匹配到活动，直接查询
+        return await _query_user_activity_eligibility(request, exact_match, status_messages)
+    
+    # 没有精确匹配，尝试模糊匹配
+    similar_activities = await _find_similar_activities(identified_activity.strip(), all_activities, request.language)
+    
+    if similar_activities:
+        # 找到相似活动，请用户确认
+        return await _request_activity_confirmation(request, identified_activity.strip(), similar_activities, status_messages)
+    else:
+        # 完全不在活动列表中，转人工
+        logger.warning(f"活动不在列表中，转人工处理", extra={
+            'session_id': request.session_id,
+            'user_input': identified_activity.strip(),
+            'available_activities': len(all_activities),
+            'transfer_reason': 'activity_not_in_list'
+        })
+        
+        response_text = get_message_by_language(
+            status_messages.get("activity_not_found", {}), 
+            request.language
+        )
+        return ProcessingResult(
+            text=response_text,
+            stage=ResponseStage.FINISH.value,
+            transfer_human=1,
+            message_type=BusinessType.ACTIVITY_QUERY.value
+        )
 
 
 def _build_activity_list_text(all_activities: List[str], language: str) -> str:
@@ -1055,13 +1049,131 @@ async def _handle_unclear_activity(request: MessageRequest, status_messages: Dic
     )
 
 
+async def _find_similar_activities(user_input: str, all_activities: List[str], language: str) -> List[str]:
+    """
+    查找与用户输入相似的活动
+    
+    Args:
+        user_input: 用户输入的活动名称
+        all_activities: 所有可用活动列表
+        language: 语言
+        
+    Returns:
+        相似活动列表（最多3个）
+    """
+    if language == "en":
+        prompt = f"""
+You are an activity matching assistant. Find activities from the activity list that are similar to the user's input.
+
+User input: {user_input}
+
+Available activities:
+{chr(10).join([f"{i+1}. {activity}" for i, activity in enumerate(all_activities)])}
+
+Please find activities that are semantically similar to the user's input. Consider:
+- Similar keywords or themes
+- Activities that might be what the user meant despite typos or different wording
+- Related activity types
+
+Return only the exact activity names that are similar, one per line. Maximum 3 results.
+If no similar activities are found, return "none".
+"""
+    else:  # 默认中文
+        prompt = f"""
+你是活动匹配助手。从活动列表中找出与用户输入相似的活动。
+
+用户输入：{user_input}
+
+可用活动：
+{chr(10).join([f"{i+1}. {activity}" for i, activity in enumerate(all_activities)])}
+
+请找出与用户输入语义相似的活动。考虑：
+- 相似的关键词或主题
+- 用户可能因为拼写错误或不同表达方式想要的活动
+- 相关的活动类型
+
+只返回相似的确切活动名称，每行一个。最多3个结果。
+如果没有找到相似活动，返回"none"。
+"""
+    
+    try:
+        response = await call_openapi_model(prompt=prompt)
+        lines = response.strip().split('\n')
+        
+        similar_activities = []
+        for line in lines:
+            line = line.strip()
+            if line and line.lower() != "none":
+                # 移除可能的编号前缀
+                if '. ' in line:
+                    line = line.split('. ', 1)[1]
+                
+                # 确保活动在原始列表中
+                if line in all_activities:
+                    similar_activities.append(line)
+        
+        return similar_activities[:3]  # 最多返回3个
+        
+    except Exception as e:
+        logger.error(f"相似活动匹配失败", extra={
+            'error': str(e),
+            'user_input': user_input
+        })
+        return []
+
+
+async def _request_activity_confirmation(request: MessageRequest, user_input: str, 
+                                       similar_activities: List[str], status_messages: Dict) -> ProcessingResult:
+    """
+    请求用户确认是否是相似的活动
+    
+    Args:
+        request: 用户请求
+        user_input: 用户原始输入
+        similar_activities: 相似活动列表
+        status_messages: 状态消息
+        
+    Returns:
+        ProcessingResult: 处理结果
+    """
+    logger.info(f"找到相似活动，请求用户确认", extra={
+        'session_id': request.session_id,
+        'user_input': user_input,
+        'similar_activities': similar_activities,
+        'similar_count': len(similar_activities)
+    })
+    
+    # 构建确认消息
+    if request.language == "en":
+        confirmation_text = f"I couldn't find the exact activity '{user_input}', but I found these similar activities:\n\n"
+        for i, activity in enumerate(similar_activities, 1):
+            confirmation_text += f"{i}. {activity}\n"
+        confirmation_text += "\nIs one of these the activity you're looking for? Please specify which one."
+    else:  # 默认中文
+        confirmation_text = f"我没有找到完全匹配的活动 '{user_input}'，但找到了这些相似的活动：\n\n"
+        for i, activity in enumerate(similar_activities, 1):
+            confirmation_text += f"{i}. {activity}\n"
+        confirmation_text += "\n请问其中有您要查询的活动吗？请明确指出是哪一个。"
+    
+    # 生成更自然的回复
+    prompt = build_reply_with_prompt(request.history or [], request.messages, confirmation_text, request.language)
+    response_text = await call_openapi_model(prompt=prompt)
+    
+    return ProcessingResult(
+        text=response_text,
+        stage=ResponseStage.WORKING.value,
+        transfer_human=0,
+        message_type=BusinessType.ACTIVITY_QUERY.value
+    )
+
+
 async def _query_user_activity_eligibility(request: MessageRequest, activity_name: str, 
                                          status_messages: Dict) -> ProcessingResult:
     """查询用户活动资格"""
     log_api_call("A004_query_user_eligibility", request.session_id, activity=activity_name)
     
     try:
-        api_result = await query_user_eligibility(request.session_id, request.site)
+        api_result = await query_user_eligibility(request.session_id, activity_name, request.site)
         eligibility_data = extract_user_eligibility(api_result)
         
         if not eligibility_data["is_success"]:
