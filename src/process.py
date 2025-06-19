@@ -387,13 +387,19 @@ def _build_response(request: MessageRequest, result: ProcessingResult, start_tim
     """构建最终响应"""
     conversation_rounds = len(request.history or []) // 2
     
+    # 优先使用request.type，如果没有则使用result.message_type
+    response_type = request.type if request.type is not None and request.type != "" else result.message_type
+    
     logger.debug(f"构建最终响应", extra={
         'session_id': request.session_id,
         'response_stage': result.stage,
         'transfer_human': result.transfer_human,
         'has_images': bool(result.images),
         'response_length': len(result.text),
-        'conversation_rounds': conversation_rounds
+        'conversation_rounds': conversation_rounds,
+        'request_type': request.type,
+        'result_message_type': result.message_type,
+        'final_type': response_type
     })
     
     return MessageResponse(
@@ -403,7 +409,7 @@ def _build_response(request: MessageRequest, result: ProcessingResult, start_tim
         stage=result.stage,
         images=result.images,
         metadata={
-            "intent": result.message_type,
+            "intent": response_type,
             "timestamp": time.time(),
             "conversation_rounds": conversation_rounds,
             "max_rounds": Constants.MAX_CONVERSATION_ROUNDS,
@@ -411,7 +417,7 @@ def _build_response(request: MessageRequest, result: ProcessingResult, start_tim
             "processing_time": round(time.time() - start_time, 3)
         },
         site=request.site,
-        type=result.message_type,
+        type=response_type,
         transfer_human=result.transfer_human
     )
 
@@ -1405,6 +1411,229 @@ Mangyaring tumugon lamang ng "normal_chat" o "inappropriate".
         return "normal_chat"
 
 
+async def identify_customer_service_question(messages: str, language: str) -> str:
+    """
+    识别是否为客服问题：正常闲聊 vs 客服问题
+    
+    Args:
+        messages: 用户消息
+        language: 语言
+        
+    Returns:
+        str: "normal_chat" - 正常闲聊, "customer_service" - 客服问题, "ai_handled" - AI可处理的问题
+    """
+    logger = get_logger("chatai-api")
+    
+    # AI可以处理的问题（不需要转人工）
+    ai_handled_keywords = [
+        "withdrawal not received", "提现未到账", "ยังไม่ได้รับการถอน", "hindi pa natatanggap ang withdrawal", "出金が届いていない",
+        "deposit not received", "充值未到账", "ยังไม่ได้รับการฝาก", "hindi pa natatanggap ang deposit", "入金が届いていない",
+        "check agent commission", "查询代理佣金", "ตรวจสอบค่าคอมมิชชั่นตัวแทน", "tingnan ang commission ng agent", "エージェントコミッションを確認",
+        "check rebate bonus", "查询返水奖金", "ตรวจสอบโบนัสคืน", "tingnan ang rebate bonus", "リベートボーナスを確認",
+        "check spin promotion", "查询转盘活动", "ตรวจสอบโปรโมชั่นหมุน", "tingnan ang spin promotion", "スピンプロモーションを確認",
+        "check vip salary", "查询vip工资", "ตรวจสอบเงินเดือน VIP", "tingnan ang VIP salary", "VIP給与を確認"
+    ]
+    
+    # 需要转人工的客服问题关键词
+    customer_service_keywords = [
+        # Withdrawal相关
+        "withdrawal options", "withdrawal problem", "withdrawal prohibited", "withdrawal", "提现选项", "提现问题", "提现被禁止", "提现",
+        "ตัวเลือกการถอน", "ปัญหาการถอน", "ถอนเงินถูกห้าม", "การถอน",
+        "mga option sa withdrawal", "problema sa withdrawal", "ipinagbawal ang withdrawal", "withdrawal",
+        "出金オプション", "出金問題", "出金禁止", "出金",
+        
+        # Deposit相关  
+        "followup deposit", "payment options", "payment problem", "deposit", "后续充值", "支付选项", "支付问题", "充值",
+        "ติดตามการฝาก", "ตัวเลือกการชำระเงิน", "ปัญหาการชำระเงิน", "การฝาก",
+        "sundan ang deposit", "mga option sa payment", "problema sa payment", "deposit",
+        "フォローアップ入金", "支払いオプション", "支払い問題", "入金",
+        
+        # Account相关
+        "how to register", "otp problem", "forgot username", "forgot password", "kyc", "add bank", "delete bank", 
+        "scam report", "hacked account", "login issue", "如何注册", "otp问题", "忘记用户名", "忘记密码", "实名认证", "添加银行", "删除银行",
+        "诈骗举报", "账户被盗", "登录问题",
+        "วิธีการลงทะเบียน", "ปัญหา OTP", "ลืมชื่อผู้ใช้", "ลืมรหัสผ่าน", "การยืนยันตัวตน", "เพิ่มธนาคาร", "ลบธนาคาร",
+        "รายงานการฉ้อโกง", "บัญชีถูกแฮก", "ปัญหาการเข้าสู่ระบบ",
+        "paano mag-register", "problema sa otp", "nakalimutan ang username", "nakalimutan ang password", "kyc", "magdagdag ng bank", "magtanggal ng bank",
+        "report ng scam", "na-hack na account", "problema sa login",
+        "登録方法", "OTP問題", "ユーザー名を忘れた", "パスワードを忘れた", "本人確認", "銀行追加", "銀行削除",
+        "詐欺報告", "アカウントハッキング", "ログイン問題",
+        
+        # Affiliate Agent相关
+        "agent commission", "agent referral", "agent bonus", "become an agent", "affiliate team", "ppa official link",
+        "代理佣金", "代理推荐", "代理奖金", "成为代理", "代理团队", "官方链接",
+        "ค่าคอมมิชชั่นตัวแทน", "การอ้างอิงตัวแทน", "โบนัสตัวแทน", "เป็นตัวแทน", "ทีมพันธมิตร", "ลิงก์อย่างเป็นทางการ",
+        "commission ng agent", "referral ng agent", "bonus ng agent", "maging agent", "affiliate team", "official link ng ppa",
+        "エージェントコミッション", "エージェント紹介", "エージェントボーナス", "エージェントになる", "アフィリエイトチーム", "公式リンク"
+    ]
+    
+    # 先检查是否是AI可处理的问题
+    message_lower = messages.lower()
+    for keyword in ai_handled_keywords:
+        if keyword.lower() in message_lower:
+            logger.info(f"识别为AI可处理的问题", extra={
+                'message': messages[:100],
+                'matched_keyword': keyword
+            })
+            return "ai_handled"
+    
+    if language == "en":
+        prompt = f"""
+You are a customer service question classifier. Determine if the user's message is a normal chat or a customer service question.
+
+User message: {messages}
+
+Customer service question categories include:
+- Withdrawal issues (except "withdrawal not received" which AI handles)
+- Deposit issues (except "deposit not received" which AI handles)  
+- Account problems (registration, login, KYC, bank account management)
+- Affiliate/Agent questions (except commission checks which AI handles)
+- Payment problems
+- Security issues
+
+Normal chat includes:
+- General conversation
+- Greetings
+- Weather, sports, entertainment topics
+- Personal life discussions
+
+Respond with only:
+- "normal_chat" - for casual conversation
+- "customer_service" - for questions that need human customer service
+
+Focus on the intent behind the message, not just keywords.
+"""
+    elif language == "th":
+        prompt = f"""
+คุณเป็นผู้จำแนกคำถามบริการลูกค้า ให้กำหนดว่าข้อความของผู้ใช้เป็นการแชทธรรมดาหรือคำถามบริการลูกค้า
+
+ข้อความของผู้ใช้: {messages}
+
+หมวดหมู่คำถามบริการลูกค้าประกอบด้วย:
+- ปัญหาการถอน (ยกเว้น "ยังไม่ได้รับการถอน" ที่ AI จัดการ)
+- ปัญหาการฝาก (ยกเว้น "ยังไม่ได้รับการฝาก" ที่ AI จัดการ)
+- ปัญหาบัญชี (การลงทะเบียน, การเข้าสู่ระบบ, KYC, การจัดการบัญชีธนาคาร)
+- คำถามพันธมิตร/ตัวแทน (ยกเว้นการตรวจสอบค่าคอมมิชชั่นที่ AI จัดการ)
+- ปัญหาการชำระเงิน
+- ปัญหาความปลอดภัย
+
+การแชทธรรมดาประกอบด้วย:
+- การสนทนาทั่วไป
+- การทักทาย
+- หัวข้อเกี่ยวกับสภาพอากาศ, กีฬา, บันเทิง
+- การพูดคุยเรื่องส่วนตัว
+
+ตอบเพียง:
+- "normal_chat" - สำหรับการสนทนาสบายๆ
+- "customer_service" - สำหรับคำถามที่ต้องการบริการลูกค้าจากมนุษย์
+
+มุ่งเน้นไปที่เจตนาเบื้องหลังข้อความ ไม่ใช่แค่คำสำคัญ
+"""
+    elif language == "tl":
+        prompt = f"""
+Ikaw ay isang customer service question classifier. Tukuyin kung ang mensahe ng user ay normal na chat o customer service question.
+
+Mensahe ng user: {messages}
+
+Ang mga kategorya ng customer service question ay kasama ang:
+- Mga problema sa withdrawal (maliban sa "hindi pa natatanggap ang withdrawal" na hinahawakan ng AI)
+- Mga problema sa deposit (maliban sa "hindi pa natatanggap ang deposit" na hinahawakan ng AI)
+- Mga problema sa account (registration, login, KYC, bank account management)
+- Mga tanong sa Affiliate/Agent (maliban sa commission checks na hinahawakan ng AI)
+- Mga problema sa payment
+- Mga isyu sa security
+
+Ang normal na chat ay kasama ang:
+- General na pag-uusap
+- Pagbati
+- Weather, sports, entertainment na mga paksa
+- Personal life na mga diskusyon
+
+Tumugon lamang ng:
+- "normal_chat" - para sa casual conversation
+- "customer_service" - para sa mga tanong na kailangan ng human customer service
+
+Tumuon sa intent sa likod ng mensahe, hindi lang sa mga keyword.
+"""
+    elif language == "ja":
+        prompt = f"""
+あなたはカスタマーサービス質問分類器です。ユーザーのメッセージが通常のチャットかカスタマーサービスの質問かを判断してください。
+
+ユーザーメッセージ: {messages}
+
+カスタマーサービス質問のカテゴリには以下が含まれます：
+- 出金問題（AIが処理する「出金が届いていない」を除く）
+- 入金問題（AIが処理する「入金が届いていない」を除く）
+- アカウント問題（登録、ログイン、KYC、銀行口座管理）
+- アフィリエイト/エージェント質問（AIが処理するコミッション確認を除く）
+- 支払い問題
+- セキュリティ問題
+
+通常のチャットには以下が含まれます：
+- 一般的な会話
+- 挨拶
+- 天気、スポーツ、エンターテイメントの話題
+- 個人的な生活の議論
+
+以下のみで回答してください：
+- "normal_chat" - カジュアルな会話の場合
+- "customer_service" - 人間のカスタマーサービスが必要な質問の場合
+
+キーワードだけでなく、メッセージの背後にある意図に焦点を当ててください。
+"""
+    else:  # 默认中文
+        prompt = f"""
+你是客服问题分类器。判断用户的消息是正常闲聊还是客服问题。
+
+用户消息：{messages}
+
+客服问题类别包括：
+- 提现问题（除了AI处理的"提现未到账"）
+- 充值问题（除了AI处理的"充值未到账"）
+- 账户问题（注册、登录、实名认证、银行账户管理）
+- 代理/联盟问题（除了AI处理的佣金查询）
+- 支付问题
+- 安全问题
+
+正常闲聊包括：
+- 一般性对话
+- 问候
+- 天气、体育、娱乐话题
+- 个人生活讨论
+
+请只回复：
+- "normal_chat" - 休闲对话
+- "customer_service" - 需要人工客服的问题
+
+重点关注消息背后的意图，而不仅仅是关键词。
+"""
+    
+    try:
+        response = await call_openapi_model(prompt=prompt)
+        result = response.strip().lower()
+        
+        # 如果模型无法准确判断，使用关键词辅助判断
+        if result not in ["normal_chat", "customer_service"]:
+            message_lower = messages.lower()
+            for keyword in customer_service_keywords:
+                if keyword.lower() in message_lower:
+                    logger.info(f"通过关键词识别为客服问题", extra={
+                        'message': messages[:100],
+                        'matched_keyword': keyword
+                    })
+                    return "customer_service"
+            return "normal_chat"
+        
+        return result
+    except Exception as e:
+        logger.error(f"客服问题识别失败", extra={
+            'error': str(e),
+            'message': messages[:100]
+        })
+        # 默认返回normal_chat，避免误判
+        return "normal_chat"
+
+
 async def handle_chat_service(request: MessageRequest) -> ProcessingResult:
     """
     处理闲聊服务
@@ -1443,11 +1672,10 @@ async def handle_chat_service(request: MessageRequest) -> ProcessingResult:
         return ProcessingResult(
             text=end_message,
             stage=ResponseStage.FINISH.value,
-            transfer_human=0,
-            message_type=BusinessType.CHAT_SERVICE.value
+            transfer_human=0
         )
     
-    # 识别消息类型
+    # 先识别是否为不当言论
     message_type = await identify_message_type(request.messages, request.language)
     
     if message_type == "inappropriate":
@@ -1468,8 +1696,53 @@ async def handle_chat_service(request: MessageRequest) -> ProcessingResult:
         return ProcessingResult(
             text=response_text,
             stage=ResponseStage.WORKING.value,
-            transfer_human=0,
-            message_type=BusinessType.CHAT_SERVICE.value
+            transfer_human=0
+        )
+    
+    # 识别是否为客服问题
+    service_question_type = await identify_customer_service_question(request.messages, request.language)
+    
+    if service_question_type == "ai_handled":
+        # AI可以处理的问题，但在闲聊模式下，引导用户使用具体业务功能
+        logger.info(f"识别为AI可处理的问题，但在闲聊模式下引导用户", extra={
+            'session_id': request.session_id,
+            'message_preview': request.messages[:50]
+        })
+        
+        response_text = get_message_by_language({
+            "zh": "我理解您想查询相关信息。为了更好地为您服务，建议您点击相应的功能按钮进行具体查询，这样我可以为您提供更准确的信息。如果有其他问题，我也很乐意帮助您！",
+            "en": "I understand you want to check related information. For better service, I suggest you click the corresponding function button for specific inquiries, so I can provide you with more accurate information. If you have other questions, I'm happy to help!",
+            "th": "ฉันเข้าใจว่าคุณต้องการตรวจสอบข้อมูลที่เกี่ยวข้อง เพื่อการบริการที่ดีขึ้น ฉันแนะนำให้คุณคลิกปุ่มฟังก์ชั่นที่เกี่ยวข้องเพื่อสอบถามเฉพาะเจาะจง เพื่อที่ฉันจะได้ให้ข้อมูลที่แม่นยำกว่า หากมีคำถามอื่นๆ ฉันยินดีช่วยเหลือ!",
+            "tl": "Naiintindihan ko na gusto ninyong tingnan ang kaugnay na impormasyon. Para sa mas magandang serbisyo, inirerekomenda kong i-click ninyo ang kaukulang function button para sa mga tukoy na pagtatanong, para mas tumpak ang impormasyon na maibibigay ko. Kung may iba pang mga tanong, masayang tutulong!",
+            "ja": "関連情報を確認したいということですね。より良いサービスのために、対応する機能ボタンをクリックして具体的にお問い合わせいただくことをお勧めします。そうすればより正確な情報を提供できます。他にもご質問があれば、喜んでお手伝いします！"
+        }, request.language)
+        
+        return ProcessingResult(
+            text=response_text,
+            stage=ResponseStage.WORKING.value,
+            transfer_human=0
+        )
+    
+    elif service_question_type == "customer_service":
+        # 需要人工客服的问题，直接转人工
+        logger.info(f"闲聊中识别为客服问题，转人工处理", extra={
+            'session_id': request.session_id,
+            'message_preview': request.messages[:50],
+            'transfer_reason': 'customer_service_question_in_chat'
+        })
+        
+        response_text = get_message_by_language({
+            "zh": "我理解您的问题需要专业的客服协助。现在为您转接人工客服，请稍等片刻。",
+            "en": "I understand your question requires professional customer service assistance. I'm now transferring you to a human agent, please wait a moment.",
+            "th": "ฉันเข้าใจว่าคำถามของคุณต้องการความช่วยเหลือจากบริการลูกค้าที่เป็นมืออาชีพ ตอนนี้กำลังโอนให้กับเจ้าหน้าที่ กรุณารอสักครู่",
+            "tl": "Naiintindihan ko na ang inyong tanong ay nangangailangan ng propesyonal na customer service assistance. Inililipat ko na kayo sa human agent, mangyaring maghintay saglit.",
+            "ja": "お客様のご質問には専門のカスタマーサービスによるサポートが必要だと理解いたします。人間のエージェントにお繋ぎいたしますので、少々お待ちください。"
+        }, request.language)
+        
+        return ProcessingResult(
+            text=response_text,
+            stage=ResponseStage.FINISH.value,
+            transfer_human=1
         )
     
     # 处理正常闲聊
@@ -1548,8 +1821,7 @@ Panatilihin ang inyong tugon na friendly, concise, at professional.
         return ProcessingResult(
             text=response_text,
             stage=ResponseStage.WORKING.value,
-            transfer_human=0,
-            message_type=BusinessType.CHAT_SERVICE.value
+            transfer_human=0
         )
         
     except Exception as e:
@@ -1570,6 +1842,5 @@ Panatilihin ang inyong tugon na friendly, concise, at professional.
         return ProcessingResult(
             text=fallback_response,
             stage=ResponseStage.WORKING.value,
-            transfer_human=0,
-            message_type=BusinessType.CHAT_SERVICE.value
+            transfer_human=0
         ) 
