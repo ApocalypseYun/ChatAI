@@ -429,8 +429,8 @@ async def _build_response(request: MessageRequest, result: ProcessingResult, sta
             "recharge", "deposit", "processing", "completed", "kumpletong"
         ]
         
+        # 修改判断条件：无论stage如何，只要是业务查询且包含状态关键词，就跳过语言保障
         is_status_result = (
-            result.stage == ResponseStage.FINISH.value and 
             response_type in [BusinessType.RECHARGE_QUERY.value, BusinessType.WITHDRAWAL_QUERY.value] and
             any(keyword in result.text for keyword in status_keywords)
         )
