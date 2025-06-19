@@ -546,6 +546,12 @@ async def _handle_order_query_s001(request: MessageRequest, status_messages: Dic
     """处理S001的订单查询"""
     order_no = extract_order_no(request.messages, request.history)
     
+    logger.info(f"S001订单查询开始", extra={
+        'session_id': request.session_id,
+        'extracted_order_no': order_no,
+        'user_message': request.messages
+    })
+    
     if not order_no:
         result = StageHandler.handle_order_not_found(request, status_messages, BusinessType.RECHARGE_QUERY.value)
         if not result.text:  # 需要使用guidance
@@ -564,6 +570,11 @@ async def _handle_order_query_s001(request: MessageRequest, status_messages: Dic
     
     try:
         api_result = await query_recharge_status(request.session_id, order_no, request.site)
+        logger.info(f"A001 API调用完成", extra={
+            'session_id': request.session_id,
+            'order_no': order_no,
+            'api_result': api_result
+        })
     except Exception as e:
         logger.error(f"A001接口调用异常", extra={
             'session_id': request.session_id,
@@ -574,6 +585,13 @@ async def _handle_order_query_s001(request: MessageRequest, status_messages: Dic
     
     # 验证API结果
     is_valid, error_message, error_type = validate_session_and_handle_errors(api_result, status_messages, request.language)
+    logger.info(f"API结果验证", extra={
+        'session_id': request.session_id,
+        'is_valid': is_valid,
+        'error_message': error_message,
+        'error_type': error_type
+    })
+    
     if not is_valid:
         if error_type == "user_input":
             # state=886: 订单号不对，不转人工
@@ -581,6 +599,10 @@ async def _handle_order_query_s001(request: MessageRequest, status_messages: Dic
                 status_messages.get("invalid_order_number", {}), 
                 request.language
             )
+            logger.info(f"订单号验证失败，返回错误消息", extra={
+                'session_id': request.session_id,
+                'response_text': response_text
+            })
             return ProcessingResult(
                 text=response_text,
                 transfer_human=0,
@@ -597,26 +619,67 @@ async def _handle_order_query_s001(request: MessageRequest, status_messages: Dic
     
     # 处理查询结果
     extracted_data = extract_recharge_status(api_result)
+    logger.info(f"数据提取完成", extra={
+        'session_id': request.session_id,
+        'extracted_data': extracted_data
+    })
+    
     if not extracted_data["is_success"]:
-        # A001接口能调通但查询失败，说明订单号不对，不转人工
-        response_text = get_message_by_language(
-            status_messages.get("invalid_order_number", {}), 
-            request.language
-        )
-        return ProcessingResult(
-            text=response_text,
-            transfer_human=0,
-            stage=ResponseStage.WORKING.value,
-            message_type=BusinessType.RECHARGE_QUERY.value
-        )
+        # 根据不同的错误类型处理
+        error_status = extracted_data["status"]
+        
+        if error_status in ["api_failed", "extraction_error", "no_status_data"]:
+            # 这些是系统或数据格式问题，转人工
+            response_text = get_message_by_language(
+                status_messages.get("query_failed", {}), 
+                request.language
+            )
+            logger.warning(f"系统错误，转人工处理", extra={
+                'session_id': request.session_id,
+                'error_status': error_status,
+                'error_message': extracted_data["message"]
+            })
+            return ProcessingResult(
+                text=response_text,
+                transfer_human=1,
+                stage=ResponseStage.FINISH.value,
+                message_type=BusinessType.RECHARGE_QUERY.value
+            )
+        else:
+            # 其他错误，可能是订单号问题，不转人工
+            response_text = get_message_by_language(
+                status_messages.get("invalid_order_number", {}), 
+                request.language
+            )
+            logger.info(f"可能的用户输入错误，不转人工", extra={
+                'session_id': request.session_id,
+                'error_status': error_status,
+                'response_text': response_text
+            })
+            return ProcessingResult(
+                text=response_text,
+                transfer_human=0,
+                stage=ResponseStage.WORKING.value,
+                message_type=BusinessType.RECHARGE_QUERY.value
+            )
     
     # 根据状态处理
+    logger.info(f"查询成功，处理状态", extra={
+        'session_id': request.session_id,
+        'status': extracted_data["status"]
+    })
     return await _process_recharge_status(extracted_data["status"], status_messages, workflow, request)
 
 
 async def _process_recharge_status(status: str, status_messages: Dict, workflow: Dict, 
                                  request: MessageRequest) -> ProcessingResult:
     """处理充值状态"""
+    logger.info(f"开始处理充值状态", extra={
+        'session_id': request.session_id,
+        'status': status,
+        'available_status_messages': list(status_messages.keys())
+    })
+    
     status_mapping = {
         "Recharge successful": ("recharge_successful", ResponseStage.FINISH.value, 0),
         "canceled": ("payment_canceled", ResponseStage.FINISH.value, 0),
@@ -629,10 +692,25 @@ async def _process_recharge_status(status: str, status_messages: Dict, workflow:
         status, ("status_unclear", ResponseStage.FINISH.value, 1)
     )
     
+    logger.info(f"状态映射结果", extra={
+        'session_id': request.session_id,
+        'input_status': status,
+        'mapped_message_key': message_key,
+        'mapped_stage': stage,
+        'mapped_transfer_human': transfer_human
+    })
+    
     response_text = get_message_by_language(
         status_messages.get(message_key, {}), 
         request.language
     )
+    
+    logger.info(f"获取到的回复文本", extra={
+        'session_id': request.session_id,
+        'message_key': message_key,
+        'response_text': response_text,
+        'language': request.language
+    })
     
     # 添加成功状态的图片
     response_images = []
@@ -646,6 +724,16 @@ async def _process_recharge_status(status: str, status_messages: Dict, workflow:
         stage=stage,
         transfer_human=transfer_human
     )
+    
+    logger.info(f"充值状态处理完成", extra={
+        'session_id': request.session_id,
+        'final_result': {
+            'text_length': len(result.text),
+            'stage': result.stage,
+            'transfer_human': result.transfer_human,
+            'has_images': bool(result.images)
+        }
+    })
     
     # 为非转人工的结果添加后续询问
     return _add_follow_up_to_result(result, request.language)

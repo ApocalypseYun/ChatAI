@@ -5,6 +5,7 @@ from Crypto.Util.Padding import pad
 from typing import Dict, Any
 from src.util import call_backend_service
 from src.config import get_config
+from src.logging_config import get_logger
 
 config = get_config()
 internal_endpoint = config.get("default_endpoint", 'https://lodiapi-w-supervise2.lodirnd.com/aiChat')
@@ -141,16 +142,94 @@ def extract_recharge_status(response: Dict[str, Any]) -> Dict[str, Any]:
         提取的关键数据字典
     """
     try:
+        # 添加调试日志
+        logger = get_logger("chatai-api")
+        
+        logger.info(f"A001 API响应结构", extra={
+            'full_response': response,
+            'state': response.get('state'),
+            'data': response.get('data'),
+            'message': response.get('message')
+        })
+        
+        # 检查基本的响应结构
+        if not isinstance(response, dict):
+            logger.error(f"API响应不是字典格式", extra={'response_type': type(response)})
+            return {
+                "status": "error",
+                "is_success": False,
+                "message": "API响应格式错误"
+            }
+        
+        state = response.get("state", -1)
         data = response.get("data", {})
+        
+        # 如果state不是0，表示API调用失败
+        if state != 0:
+            logger.info(f"API调用失败，state={state}", extra={'state': state, 'message': response.get('message')})
+            return {
+                "status": "api_failed",
+                "is_success": False,
+                "message": response.get("message", "API调用失败")
+            }
+        
+        # 尝试不同的数据结构格式
         a001_data = data.get("A001", {})
-        return {
-            "status": a001_data.get("status", "unknown"),
-            "is_success": response.get("state", -1) == 0,
+        
+        # 检查是否有A001数据
+        if not a001_data:
+            logger.warning(f"API响应中未找到A001数据", extra={
+                'data_keys': list(data.keys()),
+                'data': data
+            })
+            
+            # 尝试其他可能的字段名
+            for possible_key in ["result", "order", "payment", "recharge"]:
+                if possible_key in data:
+                    a001_data = data[possible_key]
+                    logger.info(f"使用替代字段: {possible_key}", extra={'alt_data': a001_data})
+                    break
+        
+        # 提取状态信息
+        status = a001_data.get("status", "")
+        
+        # 如果仍然没有状态信息，检查其他可能的字段
+        if not status:
+            for status_field in ["state", "result", "payment_status"]:
+                if status_field in a001_data:
+                    status = a001_data[status_field]
+                    logger.info(f"使用替代状态字段: {status_field}={status}")
+                    break
+        
+        # 如果仍然没有状态，返回特定错误
+        if not status:
+            logger.error(f"无法从API响应中提取状态信息", extra={
+                'a001_data': a001_data,
+                'data_structure': data
+            })
+            return {
+                "status": "no_status_data",
+                "is_success": False,
+                "message": "API响应中缺少状态信息"
+            }
+        
+        result = {
+            "status": status,
+            "is_success": True,  # state=0表示API调用成功
             "message": response.get("message", "")
         }
+        
+        logger.info(f"A001 提取结果", extra={
+            'extracted_data': result,
+            'a001_data': a001_data
+        })
+        
+        return result
+        
     except Exception as e:
+        logger.error(f"数据提取异常", extra={'error': str(e)}, exc_info=True)
         return {
-            "status": "error",
+            "status": "extraction_error",
             "is_success": False,
             "message": f"数据提取失败: {str(e)}"
         }
