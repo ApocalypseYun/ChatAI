@@ -180,7 +180,18 @@ async def _process_authenticated_user(request: MessageRequest) -> ProcessingResu
                 message_type=request.type or ""
             )
     
-    # 首先检查是否为模糊的deposit/withdrawal询问
+    # 首先检查是否为明确的deposit/withdrawal没到账问题
+    explicit_business_type = await check_explicit_not_received_inquiry(str(request.messages), request.language)
+    if explicit_business_type:
+        logger.info(f"检测到明确的没到账问题，直接进入{explicit_business_type}流程", extra={
+            'session_id': request.session_id,
+            'business_type': explicit_business_type,
+            'user_message': str(request.messages)[:100]
+        })
+        request.type = explicit_business_type
+        return await _handle_business_process(request, explicit_business_type)
+    
+    # 然后检查是否为模糊的deposit/withdrawal询问
     ambiguous_type = await check_ambiguous_inquiry(str(request.messages), request.language)
     if ambiguous_type:
         return await handle_ambiguous_inquiry(ambiguous_type, request)
@@ -257,6 +268,18 @@ async def _get_or_identify_business_type(request: MessageRequest) -> str:
             'preset_type': request.type
         })
         return request.type
+    
+    # 检查是否有category信息，如果有活动相关的category则直接识别为活动查询
+    if hasattr(request, 'category') and request.category:
+        activity_categories = ["Agent", "Rebate", "Lucky Spin", "All member", "Sports"]
+        category_str = str(request.category)
+        if any(cat in category_str for cat in activity_categories):
+            logger.info(f"基于category信息识别为活动查询", extra={
+                'session_id': request.session_id,
+                'category': request.category,
+                'identified_type': BusinessType.ACTIVITY_QUERY.value
+            })
+            return BusinessType.ACTIVITY_QUERY.value
     
     # 进行意图识别
     logger.debug(f"未指定业务类型，开始意图识别", extra={
@@ -933,7 +956,11 @@ async def _handle_s003_process(request: MessageRequest, stage_number: int,
                              status_messages: Dict, config: Dict) -> ProcessingResult:
     """处理S003活动查询流程"""
     if str(stage_number) in ["1", "2"]:
-        return await _handle_activity_query(request, status_messages)
+        # 检查是否有前端传来的category信息，优先处理
+        if hasattr(request, 'category') and request.category:
+            return await _handle_category_based_activity_query(request, status_messages)
+        else:
+            return await _handle_activity_query(request, status_messages)
     else:
         # 其他阶段，转人工处理
         response_text = get_message_by_language(
@@ -946,6 +973,59 @@ async def _handle_s003_process(request: MessageRequest, stage_number: int,
             stage=ResponseStage.FINISH.value,
             message_type=BusinessType.ACTIVITY_QUERY.value
         )
+
+
+async def _handle_category_based_activity_query(request: MessageRequest, status_messages: Dict) -> ProcessingResult:
+    """
+    处理基于category的活动查询（前端选择的特定活动）
+    
+    Args:
+        request: 用户请求
+        status_messages: 状态消息
+        
+    Returns:
+        ProcessingResult: 处理结果
+    """
+    logger = get_logger("chatai-api")
+    
+    logger.info(f"处理基于category的活动查询", extra={
+        'session_id': request.session_id,
+        'category': request.category,
+        'user_message': request.messages
+    })
+    
+    # 从category中提取活动名称
+    activity_name = None
+    if isinstance(request.category, dict):
+        # category格式: {"Agent": "Yesterday Dividends"}
+        for category_type, activity in request.category.items():
+            if activity:
+                activity_name = activity
+                break
+    elif isinstance(request.category, str):
+        # 如果category是字符串，直接使用
+        activity_name = request.category
+    
+    # 如果没有从category中获取到活动名称，尝试从消息中获取
+    if not activity_name:
+        activity_name = str(request.messages).strip()
+    
+    if not activity_name:
+        # 没有具体活动名称，转为常规活动查询
+        logger.warning(f"无法从category中提取活动名称，转为常规查询", extra={
+            'session_id': request.session_id,
+            'category': request.category
+        })
+        return await _handle_activity_query(request, status_messages)
+    
+    logger.info(f"提取到活动名称，直接查询资格", extra={
+        'session_id': request.session_id,
+        'activity_name': activity_name,
+        'source': 'category'
+    })
+    
+    # 直接查询用户对该活动的资格
+    return await _query_user_activity_eligibility(request, activity_name, status_messages)
 
 
 async def _handle_activity_query(request: MessageRequest, status_messages: Dict) -> ProcessingResult:
@@ -1103,12 +1183,11 @@ User message: {user_message}
 User intent category reference: {request.category}
 
 Activity type guidance based on category:
-- If category shows "Agent" → Focus on agent-related activities (代理/Agent commission, referral, etc.)
-- If category shows "Rebate" → Focus on rebate-related activities (返水/Rebate bonus, cashback, etc.)  
-- If category shows "Lucky Spin" → Focus on lucky spin/wheel activities (幸运转盘/Lucky draw, etc.)
-- If category shows "All member" → Focus on VIP/member activities (VIP salary, member bonus, etc.)
-- If category shows "Deposit" activities → Focus on deposit bonus activities
-- If category shows "Sports" → Focus on sports betting activities
+- If category shows "Agent" → Focus on agent-related activities like "Yesterday Dividends", "Weekly Dividends", "Monthly Dividends", "Realtime rebate"
+- If category shows "Rebate" → Focus on rebate-related activities like "Daily Rebate bonus", "Weekly Rebate bonus", "Monthly Rebate bonus"  
+- If category shows "Lucky Spin" → Focus on lucky spin activities like "Lucky Spin Jackpot"
+- If category shows "All member" → Focus on VIP/member activities like "VIP Weekly salary", "VIP Monthly salary"
+- If category shows "Sports" → Focus on sports betting related activities
 
 Note: Use the category as a reference to narrow down the activity type, but still match based on the actual user message content.
 """
@@ -1133,12 +1212,11 @@ If you find a matching activity, please return the complete activity name direct
 用户意图分类参考：{request.category}
 
 基于category的活动类型指导：
-- 如果category显示"Agent" → 重点关注代理相关活动（代理佣金、代理推荐等）
-- 如果category显示"Rebate" → 重点关注返水相关活动（返水奖金、现金返还等）
-- 如果category显示"Lucky Spin" → 重点关注幸运转盘类活动（幸运抽奖、转盘等）
-- 如果category显示"All member" → 重点关注VIP/会员活动（VIP工资、会员奖金等）
-- 如果category显示"Deposit"相关 → 重点关注充值奖励活动
-- 如果category显示"Sports" → 重点关注体育投注活动
+- 如果category显示"Agent" → 重点关注代理相关活动，如"Yesterday Dividends"、"Weekly Dividends"、"Monthly Dividends"、"Realtime rebate"
+- 如果category显示"Rebate" → 重点关注返水相关活动，如"Daily Rebate bonus"、"Weekly Rebate bonus"、"Monthly Rebate bonus"
+- 如果category显示"Lucky Spin" → 重点关注幸运转盘活动，如"Lucky Spin Jackpot"
+- 如果category显示"All member" → 重点关注VIP/会员活动，如"VIP Weekly salary"、"VIP Monthly salary"
+- 如果category显示"Sports" → 重点关注体育投注相关活动
 
 注意：category仅作为参考来缩小活动类型范围，仍需基于用户的实际消息内容进行匹配。
 """
@@ -1976,6 +2054,55 @@ HUWAG magdagdag ng tanong tulad ng "May maitutulong ba ako sa inyo?" sa dulo - h
         ) 
 
 
+async def check_explicit_not_received_inquiry(messages: str, language: str) -> Optional[str]:
+    """
+    检查用户是否明确表达了deposit/withdrawal没到账的问题
+    
+    Args:
+        messages: 用户消息
+        language: 语言
+        
+    Returns:
+        Optional[str]: 如果是明确的没到账问题，返回业务类型("S001" 或 "S002")，否则返回None
+    """
+    logger = get_logger("chatai-api")
+    
+    message_lower = messages.lower().strip()
+    
+    # 明确的没到账关键词组合
+    explicit_not_received_patterns = {
+        "deposit": {
+            "zh": ["充值没到账", "充值未到账", "充值没收到", "存款没到账", "存款未到账", "deposit没到账", "deposit没收到", "充钱没到账"],
+            "en": ["deposit not received", "deposit didn't arrive", "haven't received deposit", "didn't get deposit", "deposit missing", "deposit not credited", "i don't receive my deposit", "i dont receive my deposit"],
+            "th": ["เงินฝากไม่ได้รับ", "ฝากเงินแล้วไม่ถึง", "deposit ไม่ได้รับ"],
+            "tl": ["deposit hindi natatanggap", "hindi natatanggap ang deposit", "walang natanggap na deposit"],
+            "ja": ["入金が届いていない", "入金が受け取れない", "depositが届いていない"]
+        },
+        "withdrawal": {
+            "zh": ["提现没到账", "提现未到账", "提现没收到", "出金没到账", "出金未到账", "withdrawal没到账", "withdrawal没收到", "取钱没到账"],
+            "en": ["withdrawal not received", "withdrawal didn't arrive", "haven't received withdrawal", "didn't get withdrawal", "withdrawal missing", "withdrawal not credited", "i don't receive my withdrawal", "i dont receive my withdrawal"],
+            "th": ["เงินถอนไม่ได้รับ", "ถอนเงินแล้วไม่ถึง", "withdrawal ไม่ได้รับ"],
+            "tl": ["withdrawal hindi natatanggap", "hindi natatanggap ang withdrawal", "walang natanggap na withdrawal"],
+            "ja": ["出金が届いていない", "出金が受け取れない", "withdrawalが届いていない"]
+        }
+    }
+    
+    # 检查明确的没到账表述
+    for biz_type, patterns in explicit_not_received_patterns.items():
+        current_patterns = patterns.get(language, patterns["en"])
+        for pattern in current_patterns:
+            if pattern.lower() in message_lower:
+                business_code = "S001" if biz_type == "deposit" else "S002"
+                logger.info(f"检测到明确的{biz_type}没到账问题", extra={
+                    'user_message': messages,
+                    'matched_pattern': pattern,
+                    'business_type': business_code
+                })
+                return business_code
+    
+    return None
+
+
 async def check_ambiguous_inquiry(messages: str, language: str) -> Optional[str]:
     """
     检查用户是否提出了模糊的deposit/withdrawal询问
@@ -2011,11 +2138,11 @@ async def check_ambiguous_inquiry(messages: str, language: str) -> Optional[str]
     
     # 明确的查询关键词，这些不算模糊询问
     specific_keywords = {
-        "zh": ["没到账", "未到账", "没收到", "没有到", "什么时候到", "怎么操作", "如何操作", "订单号", "状态", "查询"],
-        "en": ["not received", "haven't received", "didn't receive", "when will", "how to", "order number", "status", "check"],
-        "th": ["ไม่ได้รับ", "ยังไม่ได้", "เมื่อไหร่", "วิธีการ", "หมายเลขคำสั่ง", "สถานะ"],
-        "tl": ["hindi natatanggap", "hindi pa", "kailan", "paano", "order number", "status"],
-        "ja": ["届いていない", "受け取っていない", "いつ", "方法", "注文番号", "状況"]
+        "zh": ["没到账", "未到账", "没收到", "没有到", "什么时候到", "怎么操作", "如何操作", "订单号", "状态", "查询", "充值没到账", "充值未到账", "充值没收到", "提现没到账", "提现未到账", "提现没收到"],
+        "en": ["not received", "haven't received", "didn't receive", "when will", "how to", "order number", "status", "check", "deposit not received", "deposit didn't arrive", "withdrawal not received", "withdrawal didn't arrive", "i don't receive", "i dont receive"],
+        "th": ["ไม่ได้รับ", "ยังไม่ได้", "เมื่อไหร่", "วิธีการ", "หมายเลขคำสั่ง", "สถานะ", "เงินฝากไม่ได้รับ", "เงินถอนไม่ได้รับ"],
+        "tl": ["hindi natatanggap", "hindi pa", "kailan", "paano", "order number", "status", "deposit hindi natatanggap", "withdrawal hindi natatanggap"],
+        "ja": ["届いていない", "受け取っていない", "いつ", "方法", "注文番号", "状況", "入金が届いていない", "出金が届いていない"]
     }
     
     # 如果包含明确的查询关键词，不算模糊询问
@@ -2068,8 +2195,8 @@ async def handle_ambiguous_inquiry(business_type: str, request: MessageRequest) 
         business_name_en = "deposit" if is_deposit else "withdrawal"
         response_text = f"""I understand you're asking about {business_name_en}. Could you please be more specific about what you need help with?
 
-1. How to make a {business_name_en}?
-2. {business_name_en.capitalize()} not received
+1. {business_name_en.capitalize()} not received
+2. How to make a {business_name_en}?
 3. Other {business_name_en} related questions
 
 Please let me know which option matches your question, or describe your specific issue."""
@@ -2078,8 +2205,8 @@ Please let me know which option matches your question, or describe your specific
         business_name_th = "การฝากเงิน" if is_deposit else "การถอนเงิน"
         response_text = f"""ฉันเข้าใจว่าคุณกำลังถามเกี่ยวกับ{business_name_th} คุณช่วยบอกให้ชัดเจนกว่านี้ได้ไหมว่าต้องการความช่วยเหลือเรื่องอะไร?
 
-1. วิธีการ{'ฝากเงิน' if is_deposit else 'ถอนเงิน'}?
-2. {'เงินฝาก' if is_deposit else 'เงินถอน'}ยังไม่ได้รับ
+1. {'เงินฝาก' if is_deposit else 'เงินถอน'}ยังไม่ได้รับ
+2. วิธีการ{'ฝากเงิน' if is_deposit else 'ถอนเงิน'}?
 3. คำถามอื่นๆ เกี่ยวกับ{business_name_th}
 
 กรุณาแจ้งให้ทราบว่าตัวเลือกไหนตรงกับคำถามของคุณ หรือบรรยายปัญหาเฉพาะของคุณ"""
@@ -2088,8 +2215,8 @@ Please let me know which option matches your question, or describe your specific
         business_name_tl = "deposit" if is_deposit else "withdrawal"
         response_text = f"""Naiintindihan ko na nagtanong kayo tungkol sa {business_name_tl}. Pwede ba kayong maging mas specific sa kung anong tulong ang kailangan ninyo?
 
-1. Paano mag-{business_name_tl}?
-2. Hindi pa natatanggap ang {business_name_tl}
+1. Hindi pa natatanggap ang {business_name_tl}
+2. Paano mag-{business_name_tl}?
 3. Iba pang tanong tungkol sa {business_name_tl}
 
 Mangyaring sabihin kung alin sa mga option ang tumugma sa inyong tanong, o ilarawan ang inyong specific na isyu."""
@@ -2098,8 +2225,8 @@ Mangyaring sabihin kung alin sa mga option ang tumugma sa inyong tanong, o ilara
         business_name_ja = "入金" if is_deposit else "出金"
         response_text = f"""{business_name_ja}についてお聞きになっていることは理解しております。どのようなサポートが必要か、もう少し具体的に教えていただけますか？
 
-1. {business_name_ja}の方法について
-2. {business_name_ja}が届いていない
+1. {business_name_ja}が届いていない
+2. {business_name_ja}の方法について
 3. その他の{business_name_ja}関連の質問
 
 どの選択肢がお客様のご質問に該当するか、または具体的な問題を説明してください。"""
@@ -2107,8 +2234,8 @@ Mangyaring sabihin kung alin sa mga option ang tumugma sa inyong tanong, o ilara
     else:  # 默认中文
         response_text = f"""我理解您询问的是{business_name}相关问题。请问您具体想了解什么呢？
 
-1. 怎么{business_name}？
-2. {business_name}没到账
+1. {business_name}没到账
+2. 怎么{business_name}？
 3. 其他{business_name}相关问题
 
 请告诉我哪个选项符合您的问题，或者详细描述您遇到的具体情况。"""
@@ -2143,21 +2270,21 @@ async def handle_clarified_inquiry(request: MessageRequest, original_ambiguous_t
     message_lower = request.messages.lower().strip()
     is_deposit = original_ambiguous_type == "deposit_ambiguous"
     
-    # 检查用户选择了哪个选项
-    how_to_keywords = {
-        "zh": ["1", "怎么", "如何", "方法"],
-        "en": ["1", "how to", "how do", "method"],
-        "th": ["1", "วิธีการ", "อย่างไร"],
-        "tl": ["1", "paano", "method"],
-        "ja": ["1", "方法", "どうやって"]
+    # 检查用户选择了哪个选项 - 注意选项顺序已调整
+    not_received_keywords = {
+        "zh": ["1", "没到账", "未到账", "没收到", "没有到"],
+        "en": ["1", "not received", "haven't received", "didn't receive"],
+        "th": ["1", "ไม่ได้รับ", "ยังไม่ได้"],
+        "tl": ["1", "hindi natatanggap", "hindi pa"],
+        "ja": ["1", "届いていない", "受け取っていない"]
     }
     
-    not_received_keywords = {
-        "zh": ["2", "没到账", "未到账", "没收到", "没有到"],
-        "en": ["2", "not received", "haven't received", "didn't receive"],
-        "th": ["2", "ไม่ได้รับ", "ยังไม่ได้"],
-        "tl": ["2", "hindi natatanggap", "hindi pa"],
-        "ja": ["2", "届いていない", "受け取っていない"]
+    how_to_keywords = {
+        "zh": ["2", "怎么", "如何", "方法"],
+        "en": ["2", "how to", "how do", "method"],
+        "th": ["2", "วิธีการ", "อย่างไร"],
+        "tl": ["2", "paano", "method"],
+        "ja": ["2", "方法", "どうやって"]
     }
     
     other_keywords = {
@@ -2168,12 +2295,26 @@ async def handle_clarified_inquiry(request: MessageRequest, original_ambiguous_t
         "ja": ["3", "その他", "他の"]
     }
     
-    current_how_to = how_to_keywords.get(request.language, how_to_keywords["en"])
     current_not_received = not_received_keywords.get(request.language, not_received_keywords["en"])
+    current_how_to = how_to_keywords.get(request.language, how_to_keywords["en"])
     current_other = other_keywords.get(request.language, other_keywords["en"])
     
-    # 选择1：怎么操作
-    if any(keyword in message_lower for keyword in current_how_to):
+    # 选择1：没到账 - 现在是第一个选项
+    if any(keyword in message_lower for keyword in current_not_received):
+        # 进入对应的业务流程
+        business_type = "S001" if is_deposit else "S002"
+        logger.info(f"用户选择{('充值' if is_deposit else '提现')}没到账，进入{business_type}流程", extra={
+            'session_id': request.session_id,
+            'choice': 'not_received',
+            'business_type': business_type
+        })
+        
+        # 设置请求类型并处理
+        request.type = business_type
+        return await _handle_business_process(request, business_type)
+    
+    # 选择2：怎么操作 - 现在是第二个选项
+    elif any(keyword in message_lower for keyword in current_how_to):
         # 转人工处理操作指导
         logger.info(f"用户选择操作指导，转人工处理", extra={
             'session_id': request.session_id,
@@ -2195,20 +2336,6 @@ async def handle_clarified_inquiry(request: MessageRequest, original_ambiguous_t
             transfer_human=1,
             message_type="human_service"
         )
-    
-    # 选择2：没到账
-    elif any(keyword in message_lower for keyword in current_not_received):
-        # 进入对应的业务流程
-        business_type = "S001" if is_deposit else "S002"
-        logger.info(f"用户选择{('充值' if is_deposit else '提现')}没到账，进入{business_type}流程", extra={
-            'session_id': request.session_id,
-            'choice': 'not_received',
-            'business_type': business_type
-        })
-        
-        # 设置请求类型并处理
-        request.type = business_type
-        return await _handle_business_process(request, business_type)
     
     # 选择3：其他问题
     elif any(keyword in message_lower for keyword in current_other):
@@ -2275,7 +2402,7 @@ async def handle_clarified_inquiry(request: MessageRequest, original_ambiguous_t
                 "en": f"Sorry, I didn't fully understand your {'deposit' if is_deposit else 'withdrawal'} question. I've transferred you to customer service for assistance.",
                 "th": f"ขออภัย ฉันไม่เข้าใจคำถามเกี่ยวกับ{'การฝาก' if is_deposit else 'การถอน'}ของคุณทั้งหมด ฉันได้โอนคุณไปยังฝ่ายบริการลูกค้าเพื่อความช่วยเหลือแล้ว",
                 "tl": f"Pasensya na, hindi ko lubos na naintindihan ang inyong tanong tungkol sa {'deposit' if is_deposit else 'withdrawal'}. Na-transfer na kayo sa customer service para sa tulong.",
-                "ja": f"申し訳ございませんが、お客様の{'入金' if is_deposit else '出金'}に関するご質問を完全に理解できませんでした。サポートのためカスタマーサービスにお繋ぎいたします。"
+                "ja": f"申し訳ございませんが、お客様の{'入金' if is_deposit else '出金'}に関するご質問を完全に理解できませんでした。サポートのためカスタマーサービスにお繋ぎします。"
             }, request.language)
             
             return ProcessingResult(
