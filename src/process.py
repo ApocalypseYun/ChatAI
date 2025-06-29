@@ -281,6 +281,32 @@ async def _get_or_identify_business_type(request: MessageRequest) -> str:
             })
             return BusinessType.ACTIVITY_QUERY.value
     
+    # 检查历史对话中是否有业务类型上下文，如果当前消息是订单号
+    current_message = str(request.messages).strip()
+    if len(current_message) == Constants.ORDER_NUMBER_LENGTH and current_message.isdigit():
+        # 当前消息是18位订单号，检查历史对话判断业务类型
+        if request.history:
+            for message in request.history:
+                content = message.get("content", "").lower()
+                # 检查充值相关关键词
+                deposit_keywords = ["deposit", "recharge", "充值", "ฝาก", "入金", "mag-deposit"]
+                withdrawal_keywords = ["withdrawal", "withdraw", "提现", "ถอน", "出金", "mag-withdraw"]
+                
+                if any(keyword in content for keyword in deposit_keywords):
+                    logger.info(f"根据历史对话和订单号识别为充值查询", extra={
+                        'session_id': request.session_id,
+                        'order_no': current_message,
+                        'identified_type': BusinessType.RECHARGE_QUERY.value
+                    })
+                    return BusinessType.RECHARGE_QUERY.value
+                elif any(keyword in content for keyword in withdrawal_keywords):
+                    logger.info(f"根据历史对话和订单号识别为提现查询", extra={
+                        'session_id': request.session_id,
+                        'order_no': current_message,
+                        'identified_type': BusinessType.WITHDRAWAL_QUERY.value
+                    })
+                    return BusinessType.WITHDRAWAL_QUERY.value
+    
     # 进行意图识别
     logger.debug(f"未指定业务类型，开始意图识别", extra={
         'session_id': request.session_id,
@@ -442,25 +468,45 @@ async def _build_response(request: MessageRequest, result: ProcessingResult, sta
             # 检查是否是业务查询的状态结果
             is_business_status = response_type in [BusinessType.RECHARGE_QUERY.value, BusinessType.WITHDRAWAL_QUERY.value]
             
-            # 构建增强的prompt来确保语言正确性，同时保持状态信息的准确性
-            language_guarantee_prompt = build_reply_with_prompt(
-                request.history or [], 
-                request.messages, 
-                result.text, 
-                request.language,
-                is_status_result=is_business_status  # 传递状态标识
-            )
-            # 调用AI模型重新生成，确保语言正确
-            final_response_text = await call_openapi_model(prompt=language_guarantee_prompt)
+            # 检查是否包含明确的状态信息，如果是则跳过语言保障避免改变状态信息
+            status_indicators = [
+                "successful", "failed", "pending", "canceled", "rejected", 
+                "成功", "失败", "处理中", "已取消", "已拒绝",
+                "สำเร็จ", "ล้มเหลว", "รอดำเนินการ", "ยกเลิก", "ปฏิเสธ",
+                "tagumpay", "nabigo", "naghihintay", "nakansela", "tinanggihan",
+                "成功", "失敗", "処理中", "キャンセル", "拒否"
+            ]
             
-            logger.debug(f"语言保障机制已执行", extra={
-                'session_id': request.session_id,
-                'target_language': request.language,
-                'original_length': len(result.text),
-                'final_length': len(final_response_text),
-                'is_business_status': is_business_status,
-                'applied_language_guarantee': True
-            })
+            has_status_info = any(indicator in result.text for indicator in status_indicators)
+            
+            if has_status_info and is_business_status:
+                # 如果包含状态信息，不进行语言保障以保持准确性
+                logger.debug(f"检测到状态信息，跳过语言保障机制", extra={
+                    'session_id': request.session_id,
+                    'contains_status': True,
+                    'skip_language_guarantee': True
+                })
+                final_response_text = result.text
+            else:
+                # 构建增强的prompt来确保语言正确性，同时保持状态信息的准确性
+                language_guarantee_prompt = build_reply_with_prompt(
+                    request.history or [], 
+                    request.messages, 
+                    result.text, 
+                    request.language,
+                    is_status_result=is_business_status  # 传递状态标识
+                )
+                # 调用AI模型重新生成，确保语言正确
+                final_response_text = await call_openapi_model(prompt=language_guarantee_prompt)
+                
+                logger.debug(f"语言保障机制已执行", extra={
+                    'session_id': request.session_id,
+                    'target_language': request.language,
+                    'original_length': len(result.text),
+                    'final_length': len(final_response_text),
+                    'is_business_status': is_business_status,
+                    'applied_language_guarantee': True
+                })
         except Exception as e:
             # 如果语言保障失败，使用原始回复
             logger.warning(f"语言保障机制执行失败，使用原始回复", extra={
@@ -955,12 +1001,20 @@ async def _send_telegram_notification(config: Dict, request: MessageRequest, ord
 async def _handle_s003_process(request: MessageRequest, stage_number: int, 
                              status_messages: Dict, config: Dict) -> ProcessingResult:
     """处理S003活动查询流程"""
-    if str(stage_number) in ["1", "2"]:
-        # 检查是否有前端传来的category信息，优先处理
-        if hasattr(request, 'category') and request.category:
+    # 如果有category信息，直接处理，不依赖stage_number
+    if hasattr(request, 'category') and request.category:
+        activity_categories = ["Agent", "Rebate", "Lucky Spin", "All member", "Sports"]
+        category_str = str(request.category)
+        if any(cat in category_str for cat in activity_categories):
+            logger.info(f"基于category直接处理活动查询，跳过stage检查", extra={
+                'session_id': request.session_id,
+                'category': request.category,
+                'stage_number': stage_number
+            })
             return await _handle_category_based_activity_query(request, status_messages)
-        else:
-            return await _handle_activity_query(request, status_messages)
+    
+    if str(stage_number) in ["1", "2"]:
+        return await _handle_activity_query(request, status_messages)
     else:
         # 其他阶段，转人工处理
         response_text = get_message_by_language(
@@ -1024,7 +1078,7 @@ async def _handle_category_based_activity_query(request: MessageRequest, status_
         'source': 'category'
     })
     
-    # 直接查询用户对该活动的资格
+    # 直接查询用户对该活动的资格，跳过stage识别
     return await _query_user_activity_eligibility(request, activity_name, status_messages)
 
 
@@ -2075,14 +2129,14 @@ async def check_explicit_not_received_inquiry(messages: str, language: str) -> O
             "zh": ["充值没到账", "充值未到账", "充值没收到", "存款没到账", "存款未到账", "deposit没到账", "deposit没收到", "充钱没到账"],
             "en": ["deposit not received", "deposit didn't arrive", "haven't received deposit", "didn't get deposit", "deposit missing", "deposit not credited", "i don't receive my deposit", "i dont receive my deposit"],
             "th": ["เงินฝากไม่ได้รับ", "ฝากเงินแล้วไม่ถึง", "deposit ไม่ได้รับ"],
-            "tl": ["deposit hindi natatanggap", "hindi natatanggap ang deposit", "walang natanggap na deposit"],
+            "tl": ["deposit hindi natatanggap", "hindi natatanggap ang deposit", "walang natanggap na deposit", "hindi pumasok deposit", "hindi dumating deposit", "hindi pa pumasok deposit", "deposit ko hindi pumasok"],
             "ja": ["入金が届いていない", "入金が受け取れない", "depositが届いていない"]
         },
         "withdrawal": {
             "zh": ["提现没到账", "提现未到账", "提现没收到", "出金没到账", "出金未到账", "withdrawal没到账", "withdrawal没收到", "取钱没到账"],
             "en": ["withdrawal not received", "withdrawal didn't arrive", "haven't received withdrawal", "didn't get withdrawal", "withdrawal missing", "withdrawal not credited", "i don't receive my withdrawal", "i dont receive my withdrawal"],
             "th": ["เงินถอนไม่ได้รับ", "ถอนเงินแล้วไม่ถึง", "withdrawal ไม่ได้รับ"],
-            "tl": ["withdrawal hindi natatanggap", "hindi natatanggap ang withdrawal", "walang natanggap na withdrawal"],
+            "tl": ["withdrawal hindi natatanggap", "hindi natatanggap ang withdrawal", "walang natanggap na withdrawal", "hindi pumasok withdrawal", "hindi dumating withdrawal", "hindi pa pumasok withdrawal", "withdrawal ko hindi pumasok"],
             "ja": ["出金が届いていない", "出金が受け取れない", "withdrawalが届いていない"]
         }
     }
@@ -2124,14 +2178,14 @@ async def check_ambiguous_inquiry(messages: str, language: str) -> Optional[str]
             "zh": ["充值", "充钱", "存钱"],
             "en": ["deposit", "recharge", "top up"],
             "th": ["เติมเงิน", "ฝากเงิน"],
-            "tl": ["mag-deposit", "deposit"],
+            "tl": ["mag-deposit", "deposit", "pag-deposit"],
             "ja": ["入金", "チャージ"]
         },
         "withdrawal": {
             "zh": ["提现", "取钱", "出金"],
             "en": ["withdraw", "withdrawal", "cash out"],
             "th": ["ถอนเงิน"],
-            "tl": ["mag-withdraw", "withdrawal"],
+            "tl": ["mag-withdraw", "withdrawal", "pag-withdraw"],
             "ja": ["出金", "引き出し"]
         }
     }
@@ -2141,7 +2195,7 @@ async def check_ambiguous_inquiry(messages: str, language: str) -> Optional[str]
         "zh": ["没到账", "未到账", "没收到", "没有到", "什么时候到", "怎么操作", "如何操作", "订单号", "状态", "查询", "充值没到账", "充值未到账", "充值没收到", "提现没到账", "提现未到账", "提现没收到"],
         "en": ["not received", "haven't received", "didn't receive", "when will", "how to", "order number", "status", "check", "deposit not received", "deposit didn't arrive", "withdrawal not received", "withdrawal didn't arrive", "i don't receive", "i dont receive"],
         "th": ["ไม่ได้รับ", "ยังไม่ได้", "เมื่อไหร่", "วิธีการ", "หมายเลขคำสั่ง", "สถานะ", "เงินฝากไม่ได้รับ", "เงินถอนไม่ได้รับ"],
-        "tl": ["hindi natatanggap", "hindi pa", "kailan", "paano", "order number", "status", "deposit hindi natatanggap", "withdrawal hindi natatanggap"],
+        "tl": ["hindi natatanggap", "hindi pa", "kailan", "paano", "order number", "status", "deposit hindi natatanggap", "withdrawal hindi natatanggap", "hindi pumasok", "hindi dumating"],
         "ja": ["届いていない", "受け取っていない", "いつ", "方法", "注文番号", "状況", "入金が届いていない", "出金が届いていない"]
     }
     
@@ -2171,7 +2225,7 @@ async def check_ambiguous_inquiry(messages: str, language: str) -> Optional[str]
 
 async def handle_ambiguous_inquiry(business_type: str, request: MessageRequest) -> ProcessingResult:
     """
-    处理模糊的业务询问，提供具体选项
+    处理模糊的业务询问，提供具体选项，并增加重试标记
     
     Args:
         business_type: "deposit_ambiguous" 或 "withdrawal_ambiguous"
@@ -2187,6 +2241,44 @@ async def handle_ambiguous_inquiry(business_type: str, request: MessageRequest) 
         'business_type': business_type,
         'user_message': request.messages
     })
+    
+    # 检查是否已经是第二次尝试（特别针对菲律宾语）
+    conversation_rounds = len(request.history or []) // 2
+    is_retry = False
+    
+    if request.history and conversation_rounds >= 1:
+        # 检查历史中是否有过模糊询问的回复
+        for message in request.history:
+            if message.get("role") == "assistant":
+                content = message.get("content", "")
+                if ("请问您具体想了解什么" in content or 
+                    "Could you please be more specific" in content or
+                    "คุณช่วยบอกให้ชัดเจนกว่านี้" in content or
+                    "maging mas specific" in content or
+                    "もう少し具体的に" in content):
+                    is_retry = True
+                    break
+    
+    # 如果是菲律宾语且是重试，直接转人工
+    if is_retry and request.language == "tl":
+        logger.info(f"菲律宾语用户第二次模糊询问，直接转人工", extra={
+            'session_id': request.session_id,
+            'business_type': business_type,
+            'transfer_reason': 'filipino_language_second_attempt'
+        })
+        
+        response_text = get_message_by_language({
+            "tl": "Pasensya na, mukhang may kumplikadong tanong kayo tungkol sa deposit/withdrawal. Ililipat ko kayo sa customer service para sa mas detalyadong tulong.",
+            "zh": "抱歉，看起来您的充值/提现问题比较复杂，已为您转接人工客服获得更详细的帮助。",
+            "en": "Sorry, it seems you have a complex deposit/withdrawal question. I'll transfer you to customer service for more detailed assistance."
+        }, request.language)
+        
+        return ProcessingResult(
+            text=response_text,
+            stage=ResponseStage.FINISH.value,
+            transfer_human=1,
+            message_type="human_service"
+        )
     
     is_deposit = business_type == "deposit_ambiguous"
     business_name = "充值" if is_deposit else "提现"
