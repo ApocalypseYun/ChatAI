@@ -1141,8 +1141,29 @@ async def _handle_category_based_activity_query(request: MessageRequest, status_
     all_activities.extend(extracted_data["all_member_activities"])
     all_activities.extend(extracted_data["sports_activities"])
     
-    # 检查活动是否在列表中
-    if activity_name not in all_activities:
+    # 检查活动是否在列表中（不区分大小写匹配）
+    activity_found = False
+    matched_activity_name = activity_name
+    
+    # 首先尝试精确匹配
+    if activity_name in all_activities:
+        activity_found = True
+        matched_activity_name = activity_name
+    else:
+        # 精确匹配失败，尝试不区分大小写匹配
+        activity_name_lower = activity_name.lower()
+        for available_activity in all_activities:
+            if available_activity.lower() == activity_name_lower:
+                activity_found = True
+                matched_activity_name = available_activity  # 使用API返回的准确名称
+                logger.info(f"通过不区分大小写匹配找到活动", extra={
+                    'session_id': request.session_id,
+                    'input_activity': activity_name,
+                    'matched_activity': available_activity
+                })
+                break
+    
+    if not activity_found:
         logger.warning(f"活动不在A003返回的活动列表中", extra={
             'session_id': request.session_id,
             'activity_name': activity_name,
@@ -1163,12 +1184,13 @@ async def _handle_category_based_activity_query(request: MessageRequest, status_
     
     logger.info(f"活动在A003列表中，继续查询A004用户资格", extra={
         'session_id': request.session_id,
-        'activity_name': activity_name,
+        'activity_name': matched_activity_name,
+        'original_input': activity_name,
         'confirmed_in_list': True
     })
     
-    # 第二步：活动确认存在，查询用户资格
-    return await _query_user_activity_eligibility(request, activity_name, status_messages)
+    # 第二步：活动确认存在，查询用户资格（使用匹配到的准确名称）
+    return await _query_user_activity_eligibility(request, matched_activity_name, status_messages)
 
 
 async def _handle_activity_query(request: MessageRequest, status_messages: Dict) -> ProcessingResult:
@@ -1525,18 +1547,38 @@ async def _query_user_activity_eligibility(request: MessageRequest, activity_nam
     
     try:
         api_result = await query_user_eligibility(request.session_id, activity_name, request.site)
+        
+        logger.info(f"A004接口调用完成", extra={
+            'session_id': request.session_id,
+            'activity_name': activity_name,
+            'api_result': api_result
+        })
+        
         eligibility_data = extract_user_eligibility(api_result)
         
+        logger.info(f"A004数据提取完成", extra={
+            'session_id': request.session_id,
+            'activity_name': activity_name,
+            'eligibility_data': eligibility_data
+        })
+        
         if not eligibility_data["is_success"]:
-            # A004接口能调通但查询失败，说明活动信息不对，不转人工
+            # A004接口能调通但查询失败，由于活动已通过A003验证存在，这里应该是系统问题
+            logger.error(f"A004查询失败，但活动已通过A003验证存在", extra={
+                'session_id': request.session_id,
+                'activity_name': activity_name,
+                'eligibility_data': eligibility_data,
+                'error_reason': 'a004_query_failed_after_a003_validation'
+            })
+            
             response_text = get_message_by_language(
-                status_messages.get("activity_not_found", {}), 
+                status_messages.get("query_failed", {}), 
                 request.language
             )
             return ProcessingResult(
                 text=response_text,
-                transfer_human=0,
-                stage=ResponseStage.WORKING.value,
+                transfer_human=1,
+                stage=ResponseStage.FINISH.value,
                 message_type=BusinessType.ACTIVITY_QUERY.value
             )
         
@@ -1546,6 +1588,7 @@ async def _query_user_activity_eligibility(request: MessageRequest, activity_nam
     except Exception as e:
         logger.error(f"A004接口调用异常", extra={
             'session_id': request.session_id,
+            'activity_name': activity_name,
             'error': str(e)
         }, exc_info=True)
         
@@ -2374,52 +2417,52 @@ async def handle_ambiguous_inquiry(business_type: str, request: MessageRequest) 
     
     if request.language == "en":
         business_name_en = "deposit" if is_deposit else "withdrawal"
-        response_text = f"""I understand you're asking about {business_name_en}. Could you please be more specific about what you need help with?
+        response_text = f"""What specific help do you need with {business_name_en}?
 
 1. {business_name_en.capitalize()} not received
-2. How to make a {business_name_en}?
-3. Other {business_name_en} related questions
+2. How to {business_name_en}
+3. Other {business_name_en} questions
 
-Please let me know which option matches your question, or describe your specific issue."""
+Please choose an option or describe your issue."""
         
     elif request.language == "th":
         business_name_th = "การฝากเงิน" if is_deposit else "การถอนเงิน"
-        response_text = f"""ฉันเข้าใจว่าคุณกำลังถามเกี่ยวกับ{business_name_th} คุณช่วยบอกให้ชัดเจนกว่านี้ได้ไหมว่าต้องการความช่วยเหลือเรื่องอะไร?
+        response_text = f"""คุณต้องการความช่วยเหลือเรื่องอะไรเกี่ยวกับ{business_name_th}?
 
 1. {'เงินฝาก' if is_deposit else 'เงินถอน'}ยังไม่ได้รับ
-2. วิธีการ{'ฝากเงิน' if is_deposit else 'ถอนเงิน'}?
+2. วิธีการ{'ฝากเงิน' if is_deposit else 'ถอนเงิน'}
 3. คำถามอื่นๆ เกี่ยวกับ{business_name_th}
 
-กรุณาแจ้งให้ทราบว่าตัวเลือกไหนตรงกับคำถามของคุณ หรือบรรยายปัญหาเฉพาะของคุณ"""
+กรุณาเลือกตัวเลือกหรือบอกปัญหาของคุณ"""
         
     elif request.language == "tl":
         business_name_tl = "deposit" if is_deposit else "withdrawal"
-        response_text = f"""Naiintindihan ko na nagtanong kayo tungkol sa {business_name_tl}. Pwede ba kayong maging mas specific sa kung anong tulong ang kailangan ninyo?
+        response_text = f"""Anong specific na tulong ang kailangan ninyo sa {business_name_tl}?
 
 1. Hindi pa natatanggap ang {business_name_tl}
-2. Paano mag-{business_name_tl}?
+2. Paano mag-{business_name_tl}
 3. Iba pang tanong tungkol sa {business_name_tl}
 
-Mangyaring sabihin kung alin sa mga option ang tumugma sa inyong tanong, o ilarawan ang inyong specific na isyu."""
+Mangyaring pumili ng option o ilarawan ang inyong problema."""
         
     elif request.language == "ja":
         business_name_ja = "入金" if is_deposit else "出金"
-        response_text = f"""{business_name_ja}についてお聞きになっていることは理解しております。どのようなサポートが必要か、もう少し具体的に教えていただけますか？
+        response_text = f"""{business_name_ja}について具体的にどのようなサポートが必要ですか？
 
 1. {business_name_ja}が届いていない
 2. {business_name_ja}の方法について
 3. その他の{business_name_ja}関連の質問
 
-どの選択肢がお客様のご質問に該当するか、または具体的な問題を説明してください。"""
+選択肢を選ぶか、具体的な問題を説明してください。"""
         
     else:  # 默认中文
-        response_text = f"""我理解您询问的是{business_name}相关问题。请问您具体想了解什么呢？
+        response_text = f"""您需要什么{business_name}方面的帮助？
 
 1. {business_name}没到账
-2. 怎么{business_name}？
-3. 其他{business_name}相关问题
+2. 怎么{business_name}
+3. 其他{business_name}问题
 
-请告诉我哪个选项符合您的问题，或者详细描述您遇到的具体情况。"""
+请选择选项或详细描述您的问题。"""
     
     return ProcessingResult(
         text=response_text,
