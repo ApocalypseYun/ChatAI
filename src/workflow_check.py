@@ -66,7 +66,7 @@ def _build_intent_prompt(messages: str, history: List[Dict[str, Any]], category:
     
     return prompt.strip()
 
-def _build_stage_prompt(intent: str, messages: str, history: List[Dict[str, Any]]) -> str:
+def _build_stage_prompt(intent: str, messages: str, history: List[Dict[str, Any]], category: Dict[str, str] = None) -> str:
     """
     构造用于识别会话阶段的提示语，要求AI只能从指定intent下的workflow key+step中选择
     """
@@ -77,16 +77,41 @@ def _build_stage_prompt(intent: str, messages: str, history: List[Dict[str, Any]
     prompt = f"""
 你是会话流程判断助理。
 当前业务类型编号：{intent}
-当前会话消息：
+当前会话消息：{messages}
 """
 
-    prompt += f"{messages}\n"
+    # 添加category信息作为stage识别的参考
+    if category:
+        prompt += f"用户意图分类参考：{category}\n"
+        prompt += """
+category信息解读指南（针对S003活动查询）：
+- 如果category包含具体活动名称（如 {"Agent": "Yesterday Dividends"}），说明用户明确要查询该活动
+- 此时应该识别为stage="1"或"2"，而不是stage="0"
+- stage="0"仅用于完全不相关的询问
+
+活动查询stage判断规则：
+- stage="1": 用户询问活动或提供了具体活动名称（从category中获得）
+- stage="2": 用户继续询问活动相关问题
+- stage="0": 用户询问与活动完全无关的内容
+
+"""
+
     prompt += "历史消息记录：\n"
     for turn in history:
         role = turn.get("role", "user")
         content = turn.get("content", "")
         prompt += f"{role}: {content}\n"
-    prompt += f"请只从以下流程阶段中选择最匹配的一个，返回其编号（key）：\n{options}\n只返回编号（key），不要返回其他内容。"
+    
+    prompt += f"""
+请只从以下流程阶段中选择最匹配的一个，返回其编号（key）：
+{options}
+
+判断原则：
+1. 优先参考category参数提供的上下文信息
+2. 结合用户的具体消息内容和历史对话
+3. 特别注意：如果category提供了具体活动信息，通常不应该返回stage="0"
+
+只返回编号（key），不要返回其他内容。"""
     return prompt.strip()
 
 def match_intent_by_keywords(messages: str, language: str) -> str:
@@ -137,8 +162,8 @@ async def identify_intent(messages: str, history: List[Dict[str, Any]], language
     else:
         return "chat_service"
 
-async def identify_stage(intent: str, messages: str, history: List[Dict[str, Any]]) -> str:
-    prompt = _build_stage_prompt(intent, messages, history)
+async def identify_stage(intent: str, messages: str, history: List[Dict[str, Any]], category: Dict[str, str] = None) -> str:
+    prompt = _build_stage_prompt(intent, messages, history, category)
     reply = await call_openapi_model(prompt=prompt, api_key=api_key)
     ai_result = reply.strip()
     # 校验AI返回的key是否合法

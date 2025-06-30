@@ -371,7 +371,8 @@ async def _handle_business_process(request: MessageRequest, message_type: str) -
     stage_number = await identify_stage(
         message_type,
         request.messages,
-        request.history or []
+        request.history or [],
+        request.category  # 传递category信息辅助stage识别
     )
     
     logger.info(f"流程步骤识别完成: stage={stage_number}", extra={
@@ -1001,18 +1002,21 @@ async def _send_telegram_notification(config: Dict, request: MessageRequest, ord
 async def _handle_s003_process(request: MessageRequest, stage_number: int, 
                              status_messages: Dict, config: Dict) -> ProcessingResult:
     """处理S003活动查询流程"""
-    # 如果有category信息，直接处理，不依赖stage_number
+    
+    # 优先检查是否有category信息，如果有则直接处理，无论stage是什么
     if hasattr(request, 'category') and request.category:
         activity_categories = ["Agent", "Rebate", "Lucky Spin", "All member", "Sports"]
         category_str = str(request.category)
         if any(cat in category_str for cat in activity_categories):
-            logger.info(f"基于category直接处理活动查询，跳过stage检查", extra={
+            logger.info(f"检测到有效的活动category，直接处理活动查询", extra={
                 'session_id': request.session_id,
                 'category': request.category,
-                'stage_number': stage_number
+                'stage_number': stage_number,
+                'bypass_stage_check': True
             })
             return await _handle_category_based_activity_query(request, status_messages)
     
+    # 没有category信息或category无效，按stage处理
     if str(stage_number) in ["1", "2"]:
         return await _handle_activity_query(request, status_messages)
     else:
@@ -1032,6 +1036,7 @@ async def _handle_s003_process(request: MessageRequest, stage_number: int,
 async def _handle_category_based_activity_query(request: MessageRequest, status_messages: Dict) -> ProcessingResult:
     """
     处理基于category的活动查询（前端选择的特定活动）
+    先调用A003确认活动在列表中，再查询A004用户资格
     
     Args:
         request: 用户请求
@@ -1072,13 +1077,97 @@ async def _handle_category_based_activity_query(request: MessageRequest, status_
         })
         return await _handle_activity_query(request, status_messages)
     
-    logger.info(f"提取到活动名称，直接查询资格", extra={
+    logger.info(f"提取到活动名称，开始验证活动是否存在", extra={
         'session_id': request.session_id,
         'activity_name': activity_name,
         'source': 'category'
     })
     
-    # 直接查询用户对该活动的资格，跳过stage识别
+    # 第一步：调用A003查询活动列表，确认活动是否存在
+    log_api_call("A003_query_activity_list", request.session_id)
+    try:
+        api_result = await query_activity_list(request.session_id, request.site)
+    except Exception as e:
+        logger.error(f"A003接口调用异常", extra={
+            'session_id': request.session_id,
+            'error': str(e)
+        }, exc_info=True)
+        api_result = None
+    
+    # 验证API结果
+    is_valid, error_message, error_type = validate_session_and_handle_errors(api_result, status_messages, request.language)
+    if not is_valid:
+        logger.error(f"A003接口调用失败", extra={
+            'session_id': request.session_id,
+            'error_type': error_type,
+            'error_message': error_message
+        })
+        # API失败，转人工处理
+        response_text = get_message_by_language(
+            status_messages.get("query_failed", {}), 
+            request.language
+        )
+        return ProcessingResult(
+            text=response_text,
+            transfer_human=1,
+            stage=ResponseStage.FINISH.value,
+            message_type=BusinessType.ACTIVITY_QUERY.value
+        )
+    
+    # 解析活动列表
+    extracted_data = extract_activity_list(api_result)
+    if not extracted_data["is_success"]:
+        logger.error(f"A003活动列表解析失败", extra={
+            'session_id': request.session_id,
+            'extracted_data': extracted_data
+        })
+        response_text = get_message_by_language(
+            status_messages.get("query_failed", {}), 
+            request.language
+        )
+        return ProcessingResult(
+            text=response_text,
+            transfer_human=1,
+            stage=ResponseStage.FINISH.value,
+            message_type=BusinessType.ACTIVITY_QUERY.value
+        )
+    
+    # 构建所有活动列表
+    all_activities = []
+    all_activities.extend(extracted_data["agent_activities"])
+    all_activities.extend(extracted_data["deposit_activities"])
+    all_activities.extend(extracted_data["rebate_activities"])
+    all_activities.extend(extracted_data["lucky_spin_activities"])
+    all_activities.extend(extracted_data["all_member_activities"])
+    all_activities.extend(extracted_data["sports_activities"])
+    
+    # 检查活动是否在列表中
+    if activity_name not in all_activities:
+        logger.warning(f"活动不在A003返回的活动列表中", extra={
+            'session_id': request.session_id,
+            'activity_name': activity_name,
+            'available_activities': all_activities,
+            'activity_count': len(all_activities)
+        })
+        
+        response_text = get_message_by_language(
+            status_messages.get("activity_not_found", {}), 
+            request.language
+        )
+        return ProcessingResult(
+            text=response_text,
+            transfer_human=1,
+            stage=ResponseStage.FINISH.value,
+            message_type=BusinessType.ACTIVITY_QUERY.value
+        )
+    
+    logger.info(f"活动在A003列表中，继续查询A004用户资格", extra={
+        'session_id': request.session_id,
+        'activity_name': activity_name,
+        'confirmed_in_list': True
+    })
+    
+    # 第二步：活动确认存在，查询用户资格
     return await _query_user_activity_eligibility(request, activity_name, status_messages)
 
 
