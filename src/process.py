@@ -1655,29 +1655,72 @@ def extract_order_no(messages, history):
     })
     
     all_text = ""
-    if isinstance(messages, list):
-        all_text += " ".join([str(m) for m in messages])
-    else:
-        all_text += str(messages)
+    
+    # 处理messages - 支持更多类型
+    if messages is not None:
+        if isinstance(messages, list):
+            all_text += " ".join([str(m) for m in messages])
+        elif isinstance(messages, dict):
+            # 如果是字典，尝试提取文本内容
+            if 'content' in messages:
+                all_text += str(messages['content'])
+            elif 'text' in messages:
+                all_text += str(messages['text'])
+            else:
+                all_text += str(messages)
+        else:
+            all_text += str(messages)
+    
+    # 处理history
     if history:
         for turn in history:
-            all_text += " " + str(turn.get("content", ""))
+            if isinstance(turn, dict):
+                content = turn.get("content", "")
+                all_text += " " + str(content)
+            else:
+                all_text += " " + str(turn)
+    
+    logger.debug(f"提取到的文本内容", extra={
+        'all_text': all_text,
+        'text_length': len(all_text)
+    })
     
     # 找到所有连续的数字序列
     number_sequences = re.findall(r'\d+', all_text)
+    
+    logger.debug(f"找到的数字序列", extra={
+        'sequences': number_sequences,
+        'sequence_count': len(number_sequences),
+        'sequence_lengths': [len(seq) for seq in number_sequences]
+    })
     
     # 只返回长度恰好为18位的数字序列
     for seq in number_sequences:
         if len(seq) == Constants.ORDER_NUMBER_LENGTH:
             logger.info(f"成功提取18位订单号", extra={
                 'order_no': seq,
-                'source_text_length': len(all_text)
+                'source_text_length': len(all_text),
+                'extraction_successful': True
             })
             return seq
     
+    # 如果没有找到18位数字，尝试更aggressive的匹配
+    # 移除所有非数字字符，看是否能组成18位数字
+    digits_only = re.sub(r'\D', '', all_text)
+    if len(digits_only) == Constants.ORDER_NUMBER_LENGTH:
+        logger.info(f"通过移除非数字字符提取到18位订单号", extra={
+            'order_no': digits_only,
+            'original_text': all_text,
+            'extraction_method': 'digits_only'
+        })
+        return digits_only
+    
     logger.warning(f"未找到18位订单号", extra={
         'found_sequences': len(number_sequences),
-        'sequence_lengths': [len(seq) for seq in number_sequences[:10]]
+        'sequence_lengths': [len(seq) for seq in number_sequences[:10]],
+        'digits_only_length': len(digits_only),
+        'digits_only': digits_only if len(digits_only) <= 20 else digits_only[:20] + '...',
+        'original_messages': str(messages)[:200] if messages else None
     })
     return None
 
