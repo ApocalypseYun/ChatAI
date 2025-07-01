@@ -201,10 +201,18 @@ def is_follow_up_satisfaction_check(request) -> bool:
     # 检查是否包含后续询问的关键词
     follow_up_keywords = [
         "请问还有什么可以帮您",
+        "还有其他问题吗",
+        "有什么问题要帮您的",
         "Is there anything else I can help you with",
+        "Is there anything else you'd like to know",
+        "Can I help you with anything else",
+        "Do you have any other questions",
         "มีอะไรอื่นที่ฉันสามารถช่วยคุณได้อีกไหม",
+        "คุณมีคำถามอื่นๆ อีกไหม",
         "May iba pa bang maitutulong ko sa inyo",
-        "他に何かお手伝いできることはありますか"
+        "May iba pang tanong",
+        "他に何かお手伝いできることはありますか",
+        "他にご質問はありますか"
     ]
     
     return any(keyword in last_ai_message for keyword in follow_up_keywords)

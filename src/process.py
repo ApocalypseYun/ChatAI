@@ -176,7 +176,7 @@ async def _process_authenticated_user(request: MessageRequest) -> ProcessingResu
                     "ja": "ご利用ありがとうございました。良い一日をお過ごしください！"
                 }, request.language),
                 stage=ResponseStage.FINISH.value,
-                transfer_human=0,
+                transfer_human=1,  # 用户满意结束对话时转人工，便于人工进行后续服务或关闭工单
                 message_type=request.type or ""
             )
     
