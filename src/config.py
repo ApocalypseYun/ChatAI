@@ -500,7 +500,10 @@ def load_business_config() -> Dict:
     "default_language": "en",
     "default_endpoint": "https://lodiapi-w-supervise2.lodirnd.com/aiChat",
     "telegram_bot_token": "",
-    "telegram_chat_id": "",
+    "telegram_notifications": {
+        "payment_failed_chat_id": "",
+        "confiscate_chat_id": ""
+    },
     "api_key": "",
     "openai_api": {
         "api_url": "https://api.openai.com/v1/chat/completions",

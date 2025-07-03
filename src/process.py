@@ -986,17 +986,49 @@ async def _process_withdrawal_status(status: str, status_messages: Dict, workflo
 async def _send_telegram_notification(config: Dict, request: MessageRequest, order_no: str, status: str) -> None:
     """发送Telegram通知"""
     bot_token = config.get("telegram_bot_token", "")
-    chat_id = config.get("telegram_chat_id", "")
+    telegram_config = config.get("telegram_notifications", {})
+    
+    # 根据状态选择对应的群和消息内容
+    if status == "confiscate":
+        chat_id = telegram_config.get("confiscate_chat_id", "")
+        tg_message = f"🚨 资金没收\n用户ID: {request.user_id}\n订单号: {order_no}\n状态: {status}"
+        notification_type = "confiscate"
+    elif status == "Withdrawal failed":
+        chat_id = telegram_config.get("payment_failed_chat_id", "")
+        tg_message = f"⚠️ 支付失败\n用户ID: {request.user_id}\n订单号: {order_no}\n状态: {status}"
+        notification_type = "payment_failed"
+    else:
+        # 其他状态默认发到支付失败群
+        chat_id = telegram_config.get("payment_failed_chat_id", "")
+        tg_message = f"⚠️ 异常状态\n用户ID: {request.user_id}\n订单号: {order_no}\n状态: {status}"
+        notification_type = "payment_failed"
     
     if bot_token and chat_id:
-        tg_message = f"⚠️ 提现异常\n用户ID: {request.user_id}\n订单号: {order_no}\n状态: {status}"
         try:
+            logger.info(f"发送Telegram通知", extra={
+                'session_id': request.session_id,
+                'status': status,
+                'chat_id': chat_id,
+                'user_id': request.user_id,
+                'order_no': order_no,
+                'notification_type': notification_type
+            })
             await send_to_telegram([], bot_token, chat_id, username=request.user_id, custom_message=tg_message)
         except Exception as e:
             logger.error(f"TG异常通知发送失败", extra={
                 'session_id': request.session_id,
+                'status': status,
+                'chat_id': chat_id,
                 'error': str(e)
             })
+    else:
+        logger.warning(f"Telegram通知配置不完整，跳过发送", extra={
+            'session_id': request.session_id,
+            'status': status,
+            'has_bot_token': bool(bot_token),
+            'has_chat_id': bool(chat_id),
+            'notification_type': notification_type
+        })
 
 
 async def _handle_s003_process(request: MessageRequest, stage_number: int, 
