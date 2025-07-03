@@ -80,10 +80,21 @@ def _build_stage_prompt(intent: str, messages: str, history: List[Dict[str, Any]
 当前会话消息：{messages}
 """
 
+    # 针对S001/S002业务类型，添加订单号识别的特殊说明
+    if intent in ["S001", "S002"]:
+        prompt += """
+重要：订单号识别规则
+- 如果用户消息中包含18位纯数字（如：123456789012345678），这是订单号，应该识别为stage="3"
+- 不要被其他内容干扰，只要包含18位数字就是提供了订单号
+- 即使用户同时说了其他话（如"我的订单号是123456789012345678，什么时候到账？"），也应该识别为stage="3"
+
+"""
+
     # 添加category信息作为stage识别的参考
     if category:
         prompt += f"用户意图分类参考：{category}\n"
-        prompt += """
+        if intent == "S003":
+            prompt += """
 category信息解读指南（针对S003活动查询）：
 - 如果category包含具体活动名称（如 {"Agent": "Yesterday Dividends"}），说明用户明确要查询该活动
 - 此时应该识别为stage="1"或"2"，而不是stage="0"
@@ -107,9 +118,10 @@ category信息解读指南（针对S003活动查询）：
 {options}
 
 判断原则：
-1. 优先参考category参数提供的上下文信息
-2. 结合用户的具体消息内容和历史对话
-3. 特别注意：如果category提供了具体活动信息，通常不应该返回stage="0"
+1. 优先检查是否包含18位订单号（适用于S001/S002）
+2. 参考category参数提供的上下文信息
+3. 结合用户的具体消息内容和历史对话
+4. 特别注意：如果category提供了具体活动信息，通常不应该返回stage="0"
 
 只返回编号（key），不要返回其他内容。"""
     return prompt.strip()
@@ -163,15 +175,59 @@ async def identify_intent(messages: str, history: List[Dict[str, Any]], language
         return "chat_service"
 
 async def identify_stage(intent: str, messages: str, history: List[Dict[str, Any]], category: Dict[str, str] = None) -> str:
+    from src.logging_config import get_logger
+    logger = get_logger("workflow-check")
+    
+    # 对于S001/S002业务类型，优先检查是否包含18位订单号
+    if intent in ["S001", "S002"]:
+        import re
+        
+        # 查找所有数字序列
+        number_sequences = re.findall(r'\d+', messages)
+        # 检查是否有18位数字
+        for seq in number_sequences:
+            if len(seq) == 18:  # 18位订单号
+                logger.info(f"检测到18位订单号，直接返回stage 3", extra={
+                    'intent': intent,
+                    'order_no': seq,
+                    'user_message': messages[:100],
+                    'stage_override': True,
+                    'returned_stage': "3"
+                })
+                return "3"  # 直接返回stage 3（订单号查询）
+        
+        logger.debug(f"未检测到18位订单号，继续AI识别", extra={
+            'intent': intent,
+            'found_sequences': number_sequences,
+            'sequence_lengths': [len(seq) for seq in number_sequences],
+            'user_message': messages[:100]
+        })
+    
     prompt = _build_stage_prompt(intent, messages, history, category)
     reply = await call_openapi_model(prompt=prompt, api_key=api_key)
     ai_result = reply.strip()
+    
+    # 添加AI识别结果的日志
+    logger.info(f"AI stage识别完成", extra={
+        'intent': intent,
+        'ai_result': ai_result,
+        'user_message': messages[:100],
+        'history_length': len(history) if history else 0
+    })
+    
     # 校验AI返回的key是否合法
     config = get_config()
     workflow = config.get("business_types", {}).get(intent, {}).get("workflow", {})
     if ai_result in workflow:
         return ai_result
+    
     # 返回不合法，转人工
+    logger.warning(f"AI返回的stage不合法，转人工处理", extra={
+        'intent': intent,
+        'invalid_ai_result': ai_result,
+        'valid_stages': list(workflow.keys()),
+        'fallback_to': 'human_service'
+    })
     return "human_service"
 
 def is_follow_up_satisfaction_check(request) -> bool:

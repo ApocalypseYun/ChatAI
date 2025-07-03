@@ -626,6 +626,17 @@ async def _handle_s001_process(request: MessageRequest, stage_number: int, workf
     if request.images and len(request.images) > 0:
         return await StageHandler.handle_image_upload(request, status_messages, BusinessType.RECHARGE_QUERY.value)
     
+    # 优先检查当前消息是否包含18位订单号，如果包含则直接进入stage 3处理
+    current_message_order_no = extract_order_no(request.messages, [])  # 只检查当前消息，不包括历史
+    if current_message_order_no:
+        logger.info(f"检测到当前消息包含18位订单号，直接进入stage 3处理", extra={
+            'session_id': request.session_id,
+            'order_no': current_message_order_no,
+            'original_stage': stage_number,
+            'override_to_stage': 3
+        })
+        return await _handle_order_query_s001(request, status_messages, workflow)
+    
     # 标准阶段处理
     if str(stage_number) in ["1", "2", "4"]:
         return await StageHandler.handle_standard_stage(request, str(stage_number), workflow, BusinessType.RECHARGE_QUERY.value)
@@ -845,6 +856,17 @@ async def _handle_s002_process(request: MessageRequest, stage_number: int, workf
     # 检查图片上传
     if request.images and len(request.images) > 0:
         return await StageHandler.handle_image_upload(request, status_messages, BusinessType.WITHDRAWAL_QUERY.value)
+    
+    # 优先检查当前消息是否包含18位订单号，如果包含则直接进入stage 3处理
+    current_message_order_no = extract_order_no(request.messages, [])  # 只检查当前消息，不包括历史
+    if current_message_order_no:
+        logger.info(f"检测到当前消息包含18位订单号，直接进入stage 3处理", extra={
+            'session_id': request.session_id,
+            'order_no': current_message_order_no,
+            'original_stage': stage_number,
+            'override_to_stage': 3
+        })
+        return await _handle_order_query_s002(request, status_messages, workflow, config)
     
     # 标准阶段处理
     if str(stage_number) in ["1", "2", "4"]:
@@ -1713,7 +1735,7 @@ def extract_order_no(messages, history):
                 all_text += " " + str(turn)
     
     logger.debug(f"提取到的文本内容", extra={
-        'all_text': all_text,
+        'all_text': all_text[:200] + '...' if len(all_text) > 200 else all_text,
         'text_length': len(all_text)
     })
     
@@ -1721,20 +1743,25 @@ def extract_order_no(messages, history):
     number_sequences = re.findall(r'\d+', all_text)
     
     logger.debug(f"找到的数字序列", extra={
-        'sequences': number_sequences,
+        'sequences': number_sequences[:10],  # 只显示前10个，避免日志过长
         'sequence_count': len(number_sequences),
-        'sequence_lengths': [len(seq) for seq in number_sequences]
+        'sequence_lengths': [len(seq) for seq in number_sequences[:10]]
     })
     
-    # 只返回长度恰好为18位的数字序列
-    for seq in number_sequences:
-        if len(seq) == Constants.ORDER_NUMBER_LENGTH:
-            logger.info(f"成功提取18位订单号", extra={
-                'order_no': seq,
-                'source_text_length': len(all_text),
-                'extraction_successful': True
-            })
-            return seq
+    # 优先查找恰好18位的数字序列
+    eighteen_digit_sequences = [seq for seq in number_sequences if len(seq) == Constants.ORDER_NUMBER_LENGTH]
+    
+    if eighteen_digit_sequences:
+        # 如果有多个18位数字，取第一个（通常是用户最新提供的）
+        order_no = eighteen_digit_sequences[0]
+        logger.info(f"成功提取18位订单号", extra={
+            'order_no': order_no,
+            'source_text_length': len(all_text),
+            'extraction_successful': True,
+            'found_count': len(eighteen_digit_sequences),
+            'extraction_method': 'exact_match'
+        })
+        return order_no
     
     # 如果没有找到18位数字，尝试更aggressive的匹配
     # 移除所有非数字字符，看是否能组成18位数字
@@ -1742,16 +1769,25 @@ def extract_order_no(messages, history):
     if len(digits_only) == Constants.ORDER_NUMBER_LENGTH:
         logger.info(f"通过移除非数字字符提取到18位订单号", extra={
             'order_no': digits_only,
-            'original_text': all_text,
+            'original_text': all_text[:100] + '...' if len(all_text) > 100 else all_text,
             'extraction_method': 'digits_only'
         })
         return digits_only
+    
+    # 尝试查找接近18位的数字序列（17-19位），可能是用户输入时的小错误
+    close_sequences = [seq for seq in number_sequences if 17 <= len(seq) <= 19]
+    if close_sequences:
+        logger.warning(f"找到接近18位的数字序列", extra={
+            'close_sequences': close_sequences,
+            'sequence_lengths': [len(seq) for seq in close_sequences],
+            'original_text': all_text[:100] + '...' if len(all_text) > 100 else all_text
+        })
     
     logger.warning(f"未找到18位订单号", extra={
         'found_sequences': len(number_sequences),
         'sequence_lengths': [len(seq) for seq in number_sequences[:10]],
         'digits_only_length': len(digits_only),
-        'digits_only': digits_only if len(digits_only) <= 20 else digits_only[:20] + '...',
+        'digits_only_preview': digits_only[:20] + '...' if len(digits_only) > 20 else digits_only,
         'original_messages': str(messages)[:200] if messages else None
     })
     return None
