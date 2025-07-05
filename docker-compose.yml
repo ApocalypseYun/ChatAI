@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  chatai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: chatai:latest
+    container_name: chatai-service
+    ports:
+      - "8000:8000"
+    environment:
+      # 可以通过环境变量覆盖配置
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # 挂载日志目录，便于查看日志
+      - ./logs:/app/logs
+      # 如果需要在运行时修改配置，可以挂载配置目录
+      # - ./config:/app/config:ro  # 只读挂载
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 可选：添加nginx作为反向代理
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: chatai-nginx
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./ssl:/etc/nginx/ssl:ro  # 如果使用HTTPS
+  #   depends_on:
+  #     - chatai
+  #   restart: unless-stopped
+
+networks:
+  default:
+    name: chatai-network
+
+# 可选：定义数据卷
+volumes:
+  chatai-logs:
+    driver: local 
