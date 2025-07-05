@@ -145,6 +145,40 @@ def match_intent_by_keywords(messages: str, language: str) -> str:
     return ""
 
 async def identify_intent(messages: str, history: List[Dict[str, Any]], language: str, category: Dict[str, str] = None) -> str:
+    # 首先检查category信息，如果有活动相关的category，直接返回S003
+    if category and isinstance(category, dict):
+        activity_categories = ["Agent", "Rebate", "Lucky Spin", "All member", "Sports"]
+        for cat_key, cat_value in category.items():
+            if cat_key in activity_categories and cat_value:
+                return "S003"
+    
+    # 其次检查是否是需要直接转人工的特殊问题
+    special_human_service_keywords = {
+        "zh": ["kyc", "实名认证", "身份验证", "如何注册", "怎么注册", "忘记密码", "忘记用户名", "账户被盗", "登录问题", 
+               "添加银行", "删除银行", "绑定银行卡", "解绑银行卡", "修改银行卡", "银行卡问题",
+               "如何充值", "怎么充值", "充值方法", "如何提现", "怎么提现", "提现方法",
+               "成为代理", "代理申请", "代理问题"],
+        "en": ["kyc", "how to register", "registration", "forgot password", "forgot username", "account hacked", 
+               "login issue", "login problem", "add bank", "delete bank", "bind bank card", "unbind bank card",
+               "how to deposit", "deposit method", "how to withdraw", "withdrawal method", "withdrawal options",
+               "become agent", "agent application", "how to make kyc", "verification"],
+        "th": ["kyc", "วิธีการลงทะเบียน", "ลืมรหัสผ่าน", "ลืมชื่อผู้ใช้", "บัญชีถูกแฮก", "ปัญหาการเข้าสู่ระบบ",
+               "เพิ่มธนาคาร", "ลบธนาคาร", "วิธีฝากเงิน", "วิธีถอนเงิน", "เป็นตัวแทน"],
+        "tl": ["kyc", "paano mag-register", "nakalimutan ang password", "nakalimutan ang username", "na-hack na account",
+               "problema sa login", "magdagdag ng bank", "magtanggal ng bank", "paano mag-deposit", "paano mag-withdraw",
+               "maging agent"],
+        "ja": ["kyc", "登録方法", "パスワードを忘れた", "ユーザー名を忘れた", "アカウントハッキング", "ログイン問題",
+               "銀行追加", "銀行削除", "入金方法", "出金方法", "エージェントになる"]
+    }
+    
+    # 检查特殊关键词
+    current_special_keywords = special_human_service_keywords.get(language, special_human_service_keywords["en"])
+    message_lower = messages.lower()
+    
+    for keyword in current_special_keywords:
+        if keyword.lower() in message_lower:
+            return "human_service"
+    
     # 先用关键词匹配
     matched_intent = match_intent_by_keywords(messages, language)
     if matched_intent:

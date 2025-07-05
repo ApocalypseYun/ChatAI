@@ -1273,11 +1273,8 @@ async def _handle_category_based_activity_query(request: MessageRequest, status_
             message_type=BusinessType.ACTIVITY_QUERY.value
         )
     
-    # 构建所有活动列表
+    # 构建所有活动列表（只包含奖金相关活动，去掉agent、deposit、rebate）
     all_activities = []
-    all_activities.extend(extracted_data["agent_activities"])
-    all_activities.extend(extracted_data["deposit_activities"])
-    all_activities.extend(extracted_data["rebate_activities"])
     all_activities.extend(extracted_data["lucky_spin_activities"])
     all_activities.extend(extracted_data["all_member_activities"])
     all_activities.extend(extracted_data["sports_activities"])
@@ -1379,11 +1376,8 @@ async def _handle_activity_query(request: MessageRequest, status_messages: Dict)
             message_type=BusinessType.ACTIVITY_QUERY.value
         )
     
-    # 构建活动列表
+    # 构建活动列表（只包含奖金相关活动，去掉agent、deposit、rebate）
     all_activities = []
-    all_activities.extend(extracted_data["agent_activities"])
-    all_activities.extend(extracted_data["deposit_activities"])
-    all_activities.extend(extracted_data["rebate_activities"])
     all_activities.extend(extracted_data["lucky_spin_activities"])
     all_activities.extend(extracted_data["all_member_activities"])
     all_activities.extend(extracted_data["sports_activities"])

@@ -63,10 +63,10 @@
             },
             "status_messages": {
                 "recharge_successful": {
-                    "zh": "充值成功，请等待。",
-                    "en": "Recharge successful, please wait.",
+                    "zh": "充值成功，祝您游戏愉快！",
+                    "en": "Recharge successful, enjoy your gaming!",
                     "th": "เติมเงินสำเร็จ กรุณารอ",
-                    "tl": "Matagumpay ang recharge, mangyaring maghintay."
+                    "tl": "Matagumpay ang recharge, mag-enjoy sa inyong laro!"
                 },
                 "payment_canceled": {
                     "zh": "您已取消支付。",
