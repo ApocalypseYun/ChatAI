@@ -417,7 +417,32 @@ async def _handle_business_process(request: MessageRequest, message_type: str) -
 async def _handle_stage_zero(request: MessageRequest, message_type: str, status_messages: Dict) -> ProcessingResult:
     """处理阶段0（非相关业务询问）"""
     if request.type is not None:
-        # 有预设业务类型，尝试引导用户回到正常流程
+        # 有预设业务类型，首先检查用户是否表示满意/没有其他问题
+        user_satisfied = await identify_user_satisfaction(str(request.messages), request.language)
+        if user_satisfied:
+            logger.info(f"用户在阶段0表示满意，结束对话", extra={
+                'session_id': request.session_id,
+                'business_type': message_type,
+                'user_message': str(request.messages),
+                'satisfied': True
+            })
+            
+            response_text = get_message_by_language({
+                "zh": "感谢您的使用，祝您生活愉快！",
+                "en": "Thank you for using our service. Have a great day!",
+                "th": "ขอบคุณที่ใช้บริการของเรา ขอให้มีความสุข!",
+                "tl": "Salamat sa paggamit ng aming serbisyo. Magkaroon ng magandang araw!",
+                "ja": "ご利用ありがとうございました。良い一日をお過ごしください！"
+            }, request.language)
+            
+            return ProcessingResult(
+                text=response_text,
+                stage=ResponseStage.FINISH.value,
+                transfer_human=1,  # 用户满意结束对话时转人工
+                message_type=message_type
+            )
+        
+        # 用户不满意或不确定，尝试引导用户回到正常流程
         conversation_rounds = len(request.history or []) // 2
         logger.info(f"识别为0阶段但有预设业务类型，尝试引导用户", extra={
             'session_id': request.session_id,
@@ -655,26 +680,54 @@ async def _handle_s001_process(request: MessageRequest, stage_number: int, workf
 
 async def _handle_order_query_s001(request: MessageRequest, status_messages: Dict, workflow: Dict) -> ProcessingResult:
     """处理S001的订单查询"""
-    order_no = extract_order_no(request.messages, request.history)
+    order_no, has_number_input, invalid_number = extract_order_no_with_validation(request.messages, request.history)
     
     logger.info(f"S001订单查询开始", extra={
         'session_id': request.session_id,
         'extracted_order_no': order_no,
+        'has_number_input': has_number_input,
+        'invalid_number': invalid_number,
         'user_message': request.messages
     })
     
     if not order_no:
-        result = StageHandler.handle_order_not_found(request, status_messages, BusinessType.RECHARGE_QUERY.value)
-        if not result.text:  # 需要使用guidance
-            guidance_prompt = build_guidance_prompt(
-                BusinessType.RECHARGE_QUERY.value, 
-                len(request.history or []) // 2, 
-                str(request.messages), 
-                request.history or [], 
-                request.language
+        # 检查是否有数字输入但格式不正确
+        if has_number_input and invalid_number:
+            # 用户提供了数字但位数不对，给出明确的格式错误提示
+            logger.info(f"用户提供了错误格式的订单号", extra={
+                'session_id': request.session_id,
+                'invalid_number': invalid_number,
+                'invalid_length': len(invalid_number),
+                'required_length': Constants.ORDER_NUMBER_LENGTH
+            })
+            
+            response_text = get_message_by_language({
+                "zh": f"您提供的订单号（{invalid_number}）格式不正确。请提供完整的18位订单号。",
+                "en": f"The order number you provided ({invalid_number}) is incorrect. Please provide the complete 18-digit order number.",
+                "th": f"หมายเลขคำสั่งซื้อที่คุณให้มา ({invalid_number}) ไม่ถูกต้อง กรุณาระบุหมายเลขคำสั่งซื้อ 18 หลักที่สมบูรณ์",
+                "tl": f"Ang order number na ibinigay ninyo ({invalid_number}) ay hindi tama. Mangyaring magbigay ng kumpletong 18-digit na order number.",
+                "ja": f"ご提供いただいた注文番号（{invalid_number}）が正しくありません。18桁の完全な注文番号をご提供ください。"
+            }, request.language)
+            
+            return ProcessingResult(
+                text=response_text,
+                transfer_human=0,
+                stage=ResponseStage.WORKING.value,
+                message_type=BusinessType.RECHARGE_QUERY.value
             )
-            result.text = await call_openapi_model(prompt=guidance_prompt)
-        return result
+        else:
+            # 完全没有数字输入，使用原有逻辑
+            result = StageHandler.handle_order_not_found(request, status_messages, BusinessType.RECHARGE_QUERY.value)
+            if not result.text:  # 需要使用guidance
+                guidance_prompt = build_guidance_prompt(
+                    BusinessType.RECHARGE_QUERY.value, 
+                    len(request.history or []) // 2, 
+                    str(request.messages), 
+                    request.history or [], 
+                    request.language
+                )
+                result.text = await call_openapi_model(prompt=guidance_prompt)
+            return result
     
     # 调用API查询
     log_api_call("A001_query_recharge_status", request.session_id, order_no=order_no)
@@ -887,20 +940,54 @@ async def _handle_s002_process(request: MessageRequest, stage_number: int, workf
 async def _handle_order_query_s002(request: MessageRequest, status_messages: Dict, 
                                  workflow: Dict, config: Dict) -> ProcessingResult:
     """处理S002的订单查询"""
-    order_no = extract_order_no(request.messages, request.history)
+    order_no, has_number_input, invalid_number = extract_order_no_with_validation(request.messages, request.history)
+    
+    logger.info(f"S002订单查询开始", extra={
+        'session_id': request.session_id,
+        'extracted_order_no': order_no,
+        'has_number_input': has_number_input,
+        'invalid_number': invalid_number,
+        'user_message': request.messages
+    })
     
     if not order_no:
-        result = StageHandler.handle_order_not_found(request, status_messages, BusinessType.WITHDRAWAL_QUERY.value)
-        if not result.text:  # 需要使用guidance
-            guidance_prompt = build_guidance_prompt(
-                BusinessType.WITHDRAWAL_QUERY.value, 
-                len(request.history or []) // 2, 
-                str(request.messages), 
-                request.history or [], 
-                request.language
+        # 检查是否有数字输入但格式不正确
+        if has_number_input and invalid_number:
+            # 用户提供了数字但位数不对，给出明确的格式错误提示
+            logger.info(f"用户提供了错误格式的订单号", extra={
+                'session_id': request.session_id,
+                'invalid_number': invalid_number,
+                'invalid_length': len(invalid_number),
+                'required_length': Constants.ORDER_NUMBER_LENGTH
+            })
+            
+            response_text = get_message_by_language({
+                "zh": f"您提供的订单号（{invalid_number}）格式不正确。请提供完整的18位订单号。",
+                "en": f"The order number you provided ({invalid_number}) is incorrect. Please provide the complete 18-digit order number.",
+                "th": f"หมายเลขคำสั่งซื้อที่คุณให้มา ({invalid_number}) ไม่ถูกต้อง กรุณาระบุหมายเลขคำสั่งซื้อ 18 หลักที่สมบูรณ์",
+                "tl": f"Ang order number na ibinigay ninyo ({invalid_number}) ay hindi tama. Mangyaring magbigay ng kumpletong 18-digit na order number.",
+                "ja": f"ご提供いただいた注文番号（{invalid_number}）が正しくありません。18桁の完全な注文番号をご提供ください。"
+            }, request.language)
+            
+            return ProcessingResult(
+                text=response_text,
+                transfer_human=0,
+                stage=ResponseStage.WORKING.value,
+                message_type=BusinessType.WITHDRAWAL_QUERY.value
             )
-            result.text = await call_openapi_model(prompt=guidance_prompt)
-        return result
+        else:
+            # 完全没有数字输入，使用原有逻辑
+            result = StageHandler.handle_order_not_found(request, status_messages, BusinessType.WITHDRAWAL_QUERY.value)
+            if not result.text:  # 需要使用guidance
+                guidance_prompt = build_guidance_prompt(
+                    BusinessType.WITHDRAWAL_QUERY.value, 
+                    len(request.history or []) // 2, 
+                    str(request.messages), 
+                    request.history or [], 
+                    request.language
+                )
+                result.text = await call_openapi_model(prompt=guidance_prompt)
+            return result
     
     # 调用API查询
     log_api_call("A002_query_withdrawal_status", request.session_id, order_no=order_no)
@@ -1698,9 +1785,10 @@ async def _process_activity_eligibility(eligibility_data: Dict, status_messages:
     return _add_follow_up_to_result(result, request.language)
 
 
-def extract_order_no(messages, history):
+def extract_order_no_with_validation(messages, history):
     """
-    从消息和历史中提取订单号（18位纯数字）
+    从消息和历史中提取订单号，并返回验证结果
+    返回: (订单号, 是否有数字输入, 错误的数字输入)
     """
     logger.debug(f"开始提取订单号", extra={
         'message_type': type(messages),
@@ -1761,7 +1849,7 @@ def extract_order_no(messages, history):
             'found_count': len(eighteen_digit_sequences),
             'extraction_method': 'exact_match'
         })
-        return order_no
+        return order_no, True, None
     
     # 如果没有找到18位数字，尝试更aggressive的匹配
     # 移除所有非数字字符，看是否能组成18位数字
@@ -1772,25 +1860,34 @@ def extract_order_no(messages, history):
             'original_text': all_text[:100] + '...' if len(all_text) > 100 else all_text,
             'extraction_method': 'digits_only'
         })
-        return digits_only
+        return digits_only, True, None
     
-    # 尝试查找接近18位的数字序列（17-19位），可能是用户输入时的小错误
-    close_sequences = [seq for seq in number_sequences if 17 <= len(seq) <= 19]
-    if close_sequences:
-        logger.warning(f"找到接近18位的数字序列", extra={
-            'close_sequences': close_sequences,
-            'sequence_lengths': [len(seq) for seq in close_sequences],
-            'original_text': all_text[:100] + '...' if len(all_text) > 100 else all_text
+    # 检查是否有数字输入但位数不对
+    if number_sequences:
+        # 找到最长的数字序列作为用户可能想输入的订单号
+        longest_sequence = max(number_sequences, key=len)
+        logger.warning(f"找到数字输入但位数不正确", extra={
+            'longest_sequence': longest_sequence,
+            'length': len(longest_sequence),
+            'required_length': Constants.ORDER_NUMBER_LENGTH,
+            'all_sequences': number_sequences[:5]  # 显示前5个序列
         })
+        return None, True, longest_sequence
     
-    logger.warning(f"未找到18位订单号", extra={
+    logger.warning(f"未找到任何数字输入", extra={
         'found_sequences': len(number_sequences),
-        'sequence_lengths': [len(seq) for seq in number_sequences[:10]],
         'digits_only_length': len(digits_only),
-        'digits_only_preview': digits_only[:20] + '...' if len(digits_only) > 20 else digits_only,
         'original_messages': str(messages)[:200] if messages else None
     })
-    return None
+    return None, False, None
+
+
+def extract_order_no(messages, history):
+    """
+    从消息和历史中提取订单号（18位纯数字）- 保持向后兼容
+    """
+    order_no, has_number, _ = extract_order_no_with_validation(messages, history)
+    return order_no
 
 
 def validate_session_and_handle_errors(api_result, status_messages, language):
