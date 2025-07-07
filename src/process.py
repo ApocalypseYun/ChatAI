@@ -209,11 +209,15 @@ async def _process_authenticated_user(request: MessageRequest) -> ProcessingResu
                               "Could you please be more specific" in last_ai_message or
                               "คุณช่วยบอกให้ชัดเจนกว่านี้" in last_ai_message or
                               "maging mas specific" in last_ai_message or
-                              "もう少し具体的に" in last_ai_message):
+                              "もう少し具体的に" in last_ai_message or
+                              "Anong specific na tulong" in last_ai_message or  # 菲律宾语模糊询问
+                              "Ano po ang eksaktong" in last_ai_message):  # 菲律宾语模糊询问变体
             # 检查是否有对应的模糊类型
-            if "充值" in last_ai_message or "deposit" in last_ai_message or "ฝาก" in last_ai_message or "入金" in last_ai_message:
+            if ("充值" in last_ai_message or "deposit" in last_ai_message or "ฝาก" in last_ai_message or 
+                "入金" in last_ai_message or "mag-deposit" in last_ai_message):
                 return await handle_clarified_inquiry(request, "deposit_ambiguous")
-            elif "提现" in last_ai_message or "withdrawal" in last_ai_message or "ถอน" in last_ai_message or "出金" in last_ai_message:
+            elif ("提现" in last_ai_message or "withdrawal" in last_ai_message or "ถอน" in last_ai_message or 
+                  "出金" in last_ai_message or "mag-withdraw" in last_ai_message):
                 return await handle_clarified_inquiry(request, "withdrawal_ambiguous")
     
     # 获取或识别业务类型
@@ -249,7 +253,10 @@ def _handle_max_rounds_exceeded(request: MessageRequest) -> ProcessingResult:
     
     response_text = get_message_by_language({
         "zh": "很抱歉，我们已经聊了很多轮，为了更好地帮助您，让我为您转接人工客服。",
-        "en": "I'm sorry, we've been chatting for a while. To better assist you, let me transfer you to a human agent."
+        "en": "I'm sorry, we've been chatting for a while. To better assist you, let me transfer you to a human agent.",
+        "th": "ขออภัย เราคุยกันมานานแล้ว เพื่อให้ความช่วยเหลือที่ดีขึ้น ฉันจะโอนคุณไปยังเจ้าหน้าที่",
+        "tl": "Pasensya na, matagal na nating nakakausap. Para sa mas magandang tulong, ililipat kita sa human agent.",
+        "ja": "申し訳ございませんが、長い間お話ししています。より良いサポートのため、人間のエージェントにお繋ぎします。"
     }, request.language)
     
     return ProcessingResult(
@@ -347,7 +354,13 @@ async def _handle_human_service_request(request: MessageRequest, message_type: s
             'session_id': request.session_id,
             'transfer_reason': transfer_reason
         })
-        response_text = "您需要人工客服的帮助，请稍等。"
+        response_text = get_message_by_language({
+            "zh": "您需要人工客服的帮助，请稍等。",
+            "en": "You need help from customer service, please wait.",
+            "th": "คุณต้องการความช่วยเหลือจากฝ่ายบริการลูกค้า กรุณารอสักครู่",
+            "tl": "Kailangan ninyo ng tulong mula sa customer service, mangyaring maghintay.",
+            "ja": "カスタマーサービスからのサポートが必要です。お待ちください。"
+        }, request.language)
     else:
         transfer_reason = 'unrecognized_intent'
         logger.warning(f"未识别到有效业务类型，转人工处理", extra={
@@ -355,7 +368,13 @@ async def _handle_human_service_request(request: MessageRequest, message_type: s
             'unrecognized_type': message_type,
             'transfer_reason': transfer_reason
         })
-        response_text = "抱歉，我无法理解您的问题，已为您转接人工客服。"
+        response_text = get_message_by_language({
+            "zh": "抱歉，我无法理解您的问题，已为您转接人工客服。",
+            "en": "Sorry, I cannot understand your question. I have transferred you to customer service.",
+            "th": "ขออภัย ฉันไม่เข้าใจคำถามของคุณ ฉันได้โอนคุณไปยังฝ่ายบริการลูกค้าแล้ว",
+            "tl": "Pasensya na, hindi ko naintindihan ang inyong tanong. Na-transfer na kayo sa customer service.",
+            "ja": "申し訳ございませんが、ご質問を理解できませんでした。カスタマーサービスにお繋ぎしました。"
+        }, request.language)
     
     return ProcessingResult(
         text=response_text,
@@ -403,8 +422,16 @@ async def _handle_business_process(request: MessageRequest, message_type: str) -
         return await handle_chat_service(request)
     
     # 默认情况
+    default_text = get_message_by_language({
+        "zh": "抱歉，无法处理您的请求。",
+        "en": "Sorry, I cannot process your request.",
+        "th": "ขออภัย ฉันไม่สามารถดำเนินการตามคำขอของคุณได้",
+        "tl": "Pasensya na, hindi ko maproseso ang inyong request.",
+        "ja": "申し訳ございませんが、お客様のご要求を処理できません。"
+    }, request.language)
+    
     result = ProcessingResult(
-        text="抱歉，无法处理您的请求。",
+        text=default_text,
         transfer_human=1,
         stage=ResponseStage.FINISH.value,
         message_type=message_type
@@ -670,8 +697,16 @@ async def _handle_s001_process(request: MessageRequest, stage_number: int, workf
     elif str(stage_number) == "3":
         return await _handle_order_query_s001(request, status_messages, workflow)
     
+    unknown_stage_text = get_message_by_language({
+        "zh": "未知阶段",
+        "en": "Unknown stage",
+        "th": "ขั้นตอนไม่ทราบ",
+        "tl": "Hindi kilalang stage",
+        "ja": "不明なステージ"
+    }, request.language)
+    
     return ProcessingResult(
-        text="未知阶段", 
+        text=unknown_stage_text, 
         transfer_human=1, 
         stage=ResponseStage.FINISH.value,
         message_type=BusinessType.RECHARGE_QUERY.value
@@ -929,8 +964,16 @@ async def _handle_s002_process(request: MessageRequest, stage_number: int, workf
     elif str(stage_number) == "3":
         return await _handle_order_query_s002(request, status_messages, workflow, config)
     
+    unknown_stage_text = get_message_by_language({
+        "zh": "未知阶段",
+        "en": "Unknown stage",
+        "th": "ขั้นตอนไม่ทราบ",
+        "tl": "Hindi kilalang stage",
+        "ja": "不明なステージ"
+    }, request.language)
+    
     return ProcessingResult(
-        text="未知阶段", 
+        text=unknown_stage_text, 
         transfer_human=1, 
         stage=ResponseStage.FINISH.value,
         message_type=BusinessType.WITHDRAWAL_QUERY.value
@@ -1537,7 +1580,14 @@ async def _handle_unclear_activity(request: MessageRequest, status_messages: Dic
     
     if conversation_rounds >= Constants.ACTIVITY_GUIDANCE_THRESHOLD and request.type is not None:
         # 使用引导策略，包含活动列表信息
-        enhanced_message = f"{str(request.messages)}\n\n可用活动列表：\n{activity_list_text}"
+        activity_list_header = get_message_by_language({
+            "zh": "可用活动列表：",
+            "en": "Available activities:",
+            "th": "กิจกรรมที่ใช้ได้:",
+            "tl": "Mga available na aktibidad:",
+            "ja": "利用可能なアクティビティ："
+        }, request.language)
+        enhanced_message = f"{str(request.messages)}\n\n{activity_list_header}\n{activity_list_text}"
         guidance_prompt = build_guidance_prompt(
             BusinessType.ACTIVITY_QUERY.value, 
             conversation_rounds, 
@@ -1661,6 +1711,21 @@ async def _request_activity_confirmation(request: MessageRequest, user_input: st
         for i, activity in enumerate(similar_activities, 1):
             confirmation_text += f"{i}. {activity}\n"
         confirmation_text += "\nIs one of these the activity you're looking for? Please specify which one."
+    elif request.language == "th":
+        confirmation_text = f"ฉันไม่พบกิจกรรมที่ตรงกับ '{user_input}' แต่พบกิจกรรมที่คล้ายกัน:\n\n"
+        for i, activity in enumerate(similar_activities, 1):
+            confirmation_text += f"{i}. {activity}\n"
+        confirmation_text += "\nกิจกรรมใดเป็นสิ่งที่คุณกำลังมองหา? กรุณาระบุว่าเป็นกิจกรรมใด"
+    elif request.language == "tl":
+        confirmation_text = f"Hindi ko nahanap ang eksaktong aktibidad na '{user_input}', pero nahanap ko ang mga katulad na aktibidad:\n\n"
+        for i, activity in enumerate(similar_activities, 1):
+            confirmation_text += f"{i}. {activity}\n"
+        confirmation_text += "\nAlin sa mga ito ang aktibidad na hinahanap ninyo? Mangyaring tukuyin kung alin."
+    elif request.language == "ja":
+        confirmation_text = f"'{user_input}'に正確に一致するアクティビティは見つかりませんでしたが、類似のアクティビティを見つけました：\n\n"
+        for i, activity in enumerate(similar_activities, 1):
+            confirmation_text += f"{i}. {activity}\n"
+        confirmation_text += "\nこの中にお探しのアクティビティはありますか？どちらかを具体的に教えてください。"
     else:  # 默认中文
         confirmation_text = f"我没有找到完全匹配的活动 '{user_input}'，但找到了这些相似的活动：\n\n"
         for i, activity in enumerate(similar_activities, 1):
@@ -2701,7 +2766,7 @@ async def handle_clarified_inquiry(request: MessageRequest, original_ambiguous_t
         "zh": ["1", "没到账", "未到账", "没收到", "没有到"],
         "en": ["1", "not received", "haven't received", "didn't receive"],
         "th": ["1", "ไม่ได้รับ", "ยังไม่ได้"],
-        "tl": ["1", "hindi natatanggap", "hindi pa"],
+        "tl": ["1", "hindi natatanggap", "hindi pa", "walang naresive", "walang natanggap", "hindi pumasok", "hindi dumating"],
         "ja": ["1", "届いていない", "受け取っていない"]
     }
     
@@ -2800,7 +2865,7 @@ async def handle_clarified_inquiry(request: MessageRequest, original_ambiguous_t
             "zh": ["没到账", "未到账", "没收到", "没有到", "到账", "收到", "状态", "查询", "订单"],
             "en": ["not received", "haven't received", "didn't receive", "received", "status", "check", "order"],
             "th": ["ไม่ได้รับ", "ยังไม่ได้", "ได้รับ", "สถานะ", "ตรวจสอบ"],
-            "tl": ["hindi natatanggap", "hindi pa", "natatanggap", "status", "check"],
+            "tl": ["hindi natatanggap", "hindi pa", "natatanggap", "status", "check", "walang naresive", "walang natanggap", "hindi pumasok", "hindi dumating", "naresive", "natanggap", "pumasok", "dumating"],
             "ja": ["届いていない", "受け取っていない", "届いた", "状況", "確認"]
         }
         
