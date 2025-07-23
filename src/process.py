@@ -3,6 +3,7 @@ import re
 from typing import Dict, List, Any, Optional, Tuple
 from pydantic import BaseModel
 from enum import Enum
+from datetime import datetime, timedelta
 
 # 导入配置和其他模块
 from src.config import get_config, get_message_by_language
@@ -13,7 +14,8 @@ from src.util import MessageRequest, MessageResponse, call_openapi_model, identi
 from src.telegram import send_to_telegram
 from src.request_internal import (
     query_recharge_status, query_withdrawal_status, query_activity_list, query_user_eligibility,
-    extract_recharge_status, extract_withdrawal_status, extract_activity_list, extract_user_eligibility
+    extract_recharge_status, extract_withdrawal_status, extract_activity_list, extract_user_eligibility,
+    query_user_orders, extract_user_orders
 )
 from src.logging_config import get_logger, log_api_call
 
@@ -674,10 +676,115 @@ class StageHandler:
 async def _handle_s001_process(request: MessageRequest, stage_number: int, workflow: Dict, 
                              status_messages: Dict, config: Dict) -> ProcessingResult:
     """处理S001充值查询流程"""
-    # 检查图片上传
+    # 1. 检查图片上传（凭证图片流程）
     if request.images and len(request.images) > 0:
-        return await StageHandler.handle_image_upload(request, status_messages, BusinessType.RECHARGE_QUERY.value)
-    
+        # 2. OCR识别图片内容
+        ocr_result = await ocr_and_extract_payment_info(request.images[0], request.language)
+        if not ocr_result.get("valid"):
+            # 图片不合格，转人工
+            response_text = get_message_by_language(status_messages.get("image_invalid", {}), request.language)
+            return ProcessingResult(
+                text=response_text or "您上传的充值凭证图片不符合要求，已为您转接人工客服。",
+                transfer_human=1,
+                stage=ResponseStage.FINISH.value,
+                message_type=BusinessType.RECHARGE_QUERY.value
+            )
+        # 3. 提取金额和时间，A005查单
+        amount = ocr_result.get("amount")
+        pay_time = ocr_result.get("time")
+        user_id = getattr(request, "user_id", None)
+        if not (amount and pay_time and user_id):
+            # 关键信息缺失，转人工
+            return ProcessingResult(
+                text="凭证图片识别失败，已为您转接人工客服。",
+                transfer_human=1,
+                stage=ResponseStage.FINISH.value,
+                message_type=BusinessType.RECHARGE_QUERY.value
+            )
+        # 4. 构造A005时间区间（图片时间±1小时）
+        try:
+            dt = datetime.strptime(pay_time, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return ProcessingResult(
+                text="凭证图片时间格式异常，已为您转接人工客服。",
+                transfer_human=1,
+                stage=ResponseStage.FINISH.value,
+                message_type=BusinessType.RECHARGE_QUERY.value
+            )
+        start_tm = (dt - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        end_tm = (dt + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        from src.request_internal import query_user_orders, extract_user_orders
+        a005_result = await query_user_orders(request.session_id, user_id, 1, start_tm, end_tm, request.site)
+        orders = extract_user_orders(a005_result)
+        # 5. 匹配订单（金额、时间、状态）
+        matched_order = None
+        for order in sorted(orders, key=lambda x: x["order_time"], reverse=True):
+            if order["status"] in ["pending", "completed", "待支付", "已完成"] and order["pay_name"] and amount in str(order):
+                # 时间小于等于图片时间
+                try:
+                    order_dt = datetime.strptime(order["order_time"], "%Y-%m-%d %H:%M:%S")
+                    if order_dt <= dt:
+                        matched_order = order
+                        break
+                except Exception:
+                    continue
+        if not matched_order:
+            return ProcessingResult(
+                text="未能匹配到您的充值订单，已为您转接人工客服。",
+                transfer_human=1,
+                stage=ResponseStage.FINISH.value,
+                message_type=BusinessType.RECHARGE_QUERY.value
+            )
+        # 6. 用匹配到的订单号A001查状态
+        order_no = matched_order["order_no"]
+        log_api_call("A001_query_recharge_status", request.session_id, order_no=order_no)
+        try:
+            api_result = await query_recharge_status(request.session_id, order_no, request.site)
+        except Exception as e:
+            api_result = None
+        is_valid, error_message, error_type = validate_session_and_handle_errors(api_result, status_messages, request.language)
+        if not is_valid:
+            return ProcessingResult(
+                text=error_message,
+                transfer_human=1,
+                stage=ResponseStage.FINISH.value,
+                message_type=BusinessType.RECHARGE_QUERY.value
+            )
+        extracted_data = extract_recharge_status(api_result)
+        # 7. 状态分支
+        status = extracted_data.get("status")
+        if status in ["Recharge successful", "canceled", "已取消", "成功"]:
+            # 正常返回
+            return await _process_recharge_status(status, status_messages, workflow, request)
+        elif status in ["pending", "rejected", "Recharge failed", "失败", "已拒绝"]:
+            # TG推送截图+订单号
+            from src.logging_config import get_logger
+            logger = get_logger("chatai-api")
+            try:
+                from src.telegram import send_to_telegram
+                config = get_config()
+                tg_conf = config.get("telegram_notifications", {})
+                chat_id = tg_conf.get("payment_failed_chat_id", "")
+                bot_token = config.get("telegram_bot_token", "")
+                msg = f"充值异常\n用户ID: {user_id}\n订单号: {order_no}\n状态: {status}"
+                await send_to_telegram([request.images[0]], bot_token, chat_id, username=user_id, custom_message=msg)
+                logger.info(f"充值异常已推送TG", extra={"order_no": order_no, "user_id": user_id})
+            except Exception as e:
+                logger.error(f"TG推送失败", extra={"order_no": order_no, "error": str(e)})
+            return ProcessingResult(
+                text="您的充值订单存在异常，已为您转接人工客服。",
+                transfer_human=1,
+                stage=ResponseStage.FINISH.value,
+                message_type=BusinessType.RECHARGE_QUERY.value
+            )
+        else:
+            return ProcessingResult(
+                text="充值订单状态异常，已为您转接人工客服。",
+                transfer_human=1,
+                stage=ResponseStage.FINISH.value,
+                message_type=BusinessType.RECHARGE_QUERY.value
+            )
+    # 其余逻辑保持原有
     # 优先检查当前消息是否包含18位订单号，如果包含则直接进入stage 3处理
     current_message_order_no = extract_order_no(request.messages, [])  # 只检查当前消息，不包括历史
     if current_message_order_no:
@@ -688,15 +795,12 @@ async def _handle_s001_process(request: MessageRequest, stage_number: int, workf
             'override_to_stage': 3
         })
         return await _handle_order_query_s001(request, status_messages, workflow)
-    
     # 标准阶段处理
     if str(stage_number) in ["1", "2", "4"]:
         return await StageHandler.handle_standard_stage(request, str(stage_number), workflow, BusinessType.RECHARGE_QUERY.value)
-    
     # 阶段3：订单号查询处理
     elif str(stage_number) == "3":
         return await _handle_order_query_s001(request, status_messages, workflow)
-    
     unknown_stage_text = get_message_by_language({
         "zh": "未知阶段",
         "en": "Unknown stage",
@@ -704,7 +808,6 @@ async def _handle_s001_process(request: MessageRequest, stage_number: int, workf
         "tl": "Hindi kilalang stage",
         "ja": "不明なステージ"
     }, request.language)
-    
     return ProcessingResult(
         text=unknown_stage_text, 
         transfer_human=1, 
@@ -941,43 +1044,34 @@ async def _process_recharge_status(status: str, status_messages: Dict, workflow:
 async def _handle_s002_process(request: MessageRequest, stage_number: int, workflow: Dict, 
                              status_messages: Dict, config: Dict) -> ProcessingResult:
     """处理S002提现查询流程"""
-    # 检查图片上传
+    # 1. 检查图片上传（如有图片直接转人工）
     if request.images and len(request.images) > 0:
         return await StageHandler.handle_image_upload(request, status_messages, BusinessType.WITHDRAWAL_QUERY.value)
-    
-    # 优先检查当前消息是否包含18位订单号，如果包含则直接进入stage 3处理
-    current_message_order_no = extract_order_no(request.messages, [])  # 只检查当前消息，不包括历史
-    if current_message_order_no:
-        logger.info(f"检测到当前消息包含18位订单号，直接进入stage 3处理", extra={
-            'session_id': request.session_id,
-            'order_no': current_message_order_no,
-            'original_stage': stage_number,
-            'override_to_stage': 3
-        })
-        return await _handle_order_query_s002(request, status_messages, workflow, config)
-    
-    # 标准阶段处理
-    if str(stage_number) in ["1", "2", "4"]:
-        return await StageHandler.handle_standard_stage(request, str(stage_number), workflow, BusinessType.WITHDRAWAL_QUERY.value)
-    
-    # 阶段3：订单号查询处理
-    elif str(stage_number) == "3":
-        return await _handle_order_query_s002(request, status_messages, workflow, config)
-    
-    unknown_stage_text = get_message_by_language({
-        "zh": "未知阶段",
-        "en": "Unknown stage",
-        "th": "ขั้นตอนไม่ทราบ",
-        "tl": "Hindi kilalang stage",
-        "ja": "不明なステージ"
-    }, request.language)
-    
-    return ProcessingResult(
-        text=unknown_stage_text, 
-        transfer_human=1, 
-        stage=ResponseStage.FINISH.value,
-        message_type=BusinessType.WITHDRAWAL_QUERY.value
-    )
+    # 2. 判断是否提供18位订单号
+    current_message_order_no = extract_order_no(request.messages, [])
+    if not current_message_order_no:
+        # 没有订单号，发送订单引导图片（从配置读取）
+        order_guide_img = None
+        try:
+            order_guide_img = workflow.get("order_guide", {}).get("response", {}).get("images", [])[0]
+        except Exception:
+            pass
+        response_text = get_message_by_language(status_messages.get("order_guide", {}), request.language)
+        return ProcessingResult(
+            text=response_text or "请参考下方图片获取您的提现订单号。",
+            images=[order_guide_img] if order_guide_img else [],
+            transfer_human=0,
+            stage=ResponseStage.WORKING.value,
+            message_type=BusinessType.WITHDRAWAL_QUERY.value
+        )
+    # 有订单号，进入订单查询
+    logger.info(f"检测到当前消息包含18位订单号，直接进入stage 3处理", extra={
+        'session_id': request.session_id,
+        'order_no': current_message_order_no,
+        'original_stage': stage_number,
+        'override_to_stage': 3
+    })
+    return await _handle_order_query_s002(request, status_messages, workflow, config)
 
 
 async def _handle_order_query_s002(request: MessageRequest, status_messages: Dict, 
@@ -1096,42 +1190,46 @@ async def _process_withdrawal_status(status: str, status_messages: Dict, workflo
         "pending": ("withdrawal_processing", ResponseStage.FINISH.value, 0, False),
         "obligation": ("withdrawal_processing", ResponseStage.FINISH.value, 0, False),
         "canceled": ("withdrawal_canceled", ResponseStage.FINISH.value, 0, False),
-        "rejected": ("withdrawal_issue", ResponseStage.FINISH.value, 1, False),
-        "prepare": ("withdrawal_issue", ResponseStage.FINISH.value, 1, False),
-        "lock": ("withdrawal_issue", ResponseStage.FINISH.value, 1, False),
-        "oblock": ("withdrawal_issue", ResponseStage.FINISH.value, 1, False),
-        "refused": ("withdrawal_issue", ResponseStage.FINISH.value, 1, False),
+        "rejected": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True),
+        "prepare": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True),
+        "lock": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True),
+        "oblock": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True),
+        "refused": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True),
         "Withdrawal failed": ("withdrawal_failed", ResponseStage.FINISH.value, 1, True),
         "confiscate": ("withdrawal_failed", ResponseStage.FINISH.value, 1, True),
     }
-    
     message_key, stage, transfer_human, needs_telegram = status_mapping.get(
         status, ("withdrawal_issue", ResponseStage.FINISH.value, 1, False)
     )
-    
     # 发送TG通知（如果需要）
     if needs_telegram:
         await _send_telegram_notification(config, request, extract_order_no(request.messages, request.history), status)
-    
+    # 提现成功，追问用户是否收到款项
+    if status == "Withdrawal successful":
+        response_text = get_message_by_language(status_messages.get("withdrawal_successful", {}), request.language)
+        response_text += "\n请问您有收到这笔款项吗？如未收到请回复'未收到'。"
+        return ProcessingResult(
+            text=response_text,
+            stage=stage,
+            transfer_human=0,
+            images=workflow.get("4", {}).get("response", {}).get("images", []),
+            message_type=BusinessType.WITHDRAWAL_QUERY.value
+        )
     response_text = get_message_by_language(
         status_messages.get(message_key, {}), 
         request.language
     )
-    
-    # 添加成功状态的图片
     response_images = []
     if status == "Withdrawal successful":
         stage_4_info = workflow.get("4", {})
         response_images = stage_4_info.get("response", {}).get("images", [])
-    
     result = ProcessingResult(
         text=response_text,
         images=response_images,
         stage=stage,
-        transfer_human=transfer_human
+        transfer_human=transfer_human,
+        message_type=BusinessType.WITHDRAWAL_QUERY.value
     )
-    
-    # 为非转人工的结果添加后续询问
     return _add_follow_up_to_result(result, request.language)
 
 
@@ -2902,3 +3000,44 @@ async def handle_clarified_inquiry(request: MessageRequest, original_ambiguous_t
                 transfer_human=1,
                 message_type="human_service"
             )
+
+
+async def ocr_and_extract_payment_info(image, language="zh"):
+    """
+    对充值凭证图片进行OCR识别，判断是否包含关键字，并提取金额和时间。
+    Args:
+        image: 图片内容（base64或url）
+        language: 语言
+    Returns:
+        dict: {
+            'valid': bool,  # 是否包含关键字
+            'amount': str or None,  # 金额
+            'time': str or None,    # 时间（格式：YYYY-MM-DD HH:MM:SS）
+            'raw_text': str         # OCR原文
+        }
+    """
+    from src.util import call_openapi_model
+    # 构造OCR识别prompt
+    prompt = f"""
+请对下述充值凭证图片做OCR识别，返回图片中所有可见的文字内容，并判断是否包含"Successful Payment via QR"和"maya"字样。
+同时请尽量提取图片中的支付金额（数字）和支付时间（如2025-07-09 22:00:00或类似格式）。
+
+图片内容：{image}
+
+请以如下JSON格式返回：
+{{
+  "valid": true/false,  // 是否包含关键字
+  "amount": "金额字符串或null",
+  "time": "时间字符串或null",
+  "raw_text": "图片所有文字内容"
+}}
+"""
+    result = await call_openapi_model(prompt=prompt)
+    # 尝试解析JSON
+    try:
+        import json
+        info = json.loads(result)
+        return info
+    except Exception:
+        # 兜底：只返回原始文本
+        return {"valid": False, "amount": None, "time": None, "raw_text": result}

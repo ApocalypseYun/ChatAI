@@ -132,6 +132,59 @@ async def query_user_eligibility(session_id: str, active_name: str, site: int = 
     headers = {"Content-Type": "application/json"}
     return await call_backend_service(url=url, method="POST", json_data={"data": encrypted_data}, headers=headers)
 
+# 新增：A005接口调用
+async def query_user_orders(session_id, user_id, order_type, start_tm, end_tm, site):
+    """
+    调用A005接口查询用户订单信息
+    Args:
+        session_id: 会话ID
+        user_id: 用户ID
+        order_type: 订单类型（1为充值）
+        start_tm: 开始时间（字符串，格式：YYYY-MM-DD HH:MM:SS）
+        end_tm: 结束时间（字符串，格式：YYYY-MM-DD HH:MM:SS）
+        site: 站点ID
+    Returns:
+        dict: 接口返回结果
+    """
+    from src.util import call_openapi_model
+    payload = {
+        "site": site,
+        "session_id": session_id,
+        "code": "A005",
+        "params": {
+            "userId": user_id,
+            "orderType": str(order_type),
+            "start_tm": start_tm,
+            "end_tm": end_tm
+        }
+    }
+    # 将payload序列化为字符串prompt传递
+    return await call_openapi_model(prompt=json.dumps(payload))
+
+
+def extract_user_orders(api_result):
+    """
+    解析A005接口返回，提取订单列表
+    Args:
+        api_result: A005接口返回的dict
+    Returns:
+        list[dict]: 每个订单包含 order_no, status, order_time, pay_name
+    """
+    orders = []
+    try:
+        data = api_result.get("data", {})
+        order_list = data.get("A005", [])
+        for item in order_list:
+            orders.append({
+                "order_no": item.get("order_no"),
+                "status": item.get("status"),
+                "order_time": item.get("order_time"),
+                "pay_name": item.get("pay_name")
+            })
+    except Exception:
+        pass
+    return orders
+
 # 数据提取函数
 def extract_recharge_status(response: Dict[str, Any]) -> Dict[str, Any]:
     """
