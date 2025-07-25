@@ -20,6 +20,8 @@ from pydantic import ValidationError
 from src.config import init_config, reload_config
 from src.process import process_message
 from src.util import MessageRequest, MessageResponse
+from src.util import IntentRecognitionRequest, IntentRecognitionResponse
+from src.util import call_openapi_model
 from src.logging_config import init_logging, get_logger, log_request
 
 # 定义lifespan上下文管理器
@@ -219,6 +221,30 @@ async def api_process_message(request: MessageRequest):
             'processing_time': round(processing_time, 3)
         }, exc_info=True)
         raise HTTPException(status_code=500, detail=f"消息处理失败: {str(e)}") from e
+
+# 通用意图识别接口
+@app.post("/recognize_intent", response_model=IntentRecognitionResponse)
+async def recognize_intent(request: IntentRecognitionRequest):
+    text = request.text or ""
+    intents = request.intents or []
+    if not text or not intents:
+        return IntentRecognitionResponse(text=text, intent="")
+    # 构造大模型提示词
+    prompt = (
+        "你是一个意图识别助手。请从下面的意图列表中选择最符合用户输入的意图，只返回意图本身，不要返回其他内容。\n"
+        f"用户输入: {text}\n"
+        f"可选意图: {', '.join(intents)}\n"
+        "请只返回最匹配的意图字符串，如果没有合适的意图请返回空字符串。"
+    )
+    try:
+        llm_response = await call_openapi_model(prompt=prompt)
+        intent = llm_response.strip().split('\n')[0]  # 只取第一行，防止多余内容
+        if intent not in intents:
+            intent = ""
+        return IntentRecognitionResponse(text=text, intent=intent)
+    except Exception as e:
+        # LLM调用失败时返回空意图
+        return IntentRecognitionResponse(text=text, intent="")
 
 # 健康检查接口
 @app.get("/health")

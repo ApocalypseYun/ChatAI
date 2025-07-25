@@ -61,6 +61,16 @@ class MessageResponse(BaseModel):
     type: Optional[str] = None
     transfer_human: int = 0
 
+# 新增：通用意图识别请求模型
+class IntentRecognitionRequest(BaseModel):
+    text: str
+    intents: list[str]
+
+# 新增：通用意图识别响应模型
+class IntentRecognitionResponse(BaseModel):
+    text: str
+    intent: str
+
 
 # 通用调用其他后端服务接口的方法
 async def call_backend_service(
