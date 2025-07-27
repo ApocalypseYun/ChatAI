@@ -46,12 +46,13 @@ class ResponseStage(Enum):
 class ProcessingResult:
     """处理结果的数据类"""
     def __init__(self, text: str = "", images: List[str] = None, stage: str = ResponseStage.WORKING.value, 
-                 transfer_human: int = 0, message_type: str = ""):
+                 transfer_human: int = 0, message_type: str = "", telegram_notification: Optional[Dict[str, Any]] = None):
         self.text = text
         self.images = images or []
         self.stage = stage
         self.transfer_human = transfer_human
         self.message_type = message_type
+        self.telegram_notification = telegram_notification
 
 
 async def process_message(request: MessageRequest) -> MessageResponse:
@@ -185,13 +186,71 @@ async def _process_authenticated_user(request: MessageRequest) -> ProcessingResu
     # 首先检查是否为明确的deposit/withdrawal没到账问题
     explicit_business_type = await check_explicit_not_received_inquiry(str(request.messages), request.language)
     if explicit_business_type:
-        logger.info(f"检测到明确的没到账问题，直接进入{explicit_business_type}流程", extra={
+        logger.info(f"检测到明确没到账问题", extra={
             'session_id': request.session_id,
             'business_type': explicit_business_type,
             'user_message': str(request.messages)[:100]
         })
-        request.type = explicit_business_type
-        return await _handle_business_process(request, explicit_business_type)
+        
+        if explicit_business_type == "S001":  # 充值没到账
+            # 检查是否已经包含订单号
+            import re
+            number_sequences = re.findall(r'\d+', str(request.messages))
+            has_18_digit_order = any(len(seq) == 18 for seq in number_sequences)
+            
+            if has_18_digit_order:
+                # 如果已有订单号，直接进行订单查询流程
+                logger.info(f"充值没到账问题包含订单号，直接查询", extra={
+                    'session_id': request.session_id,
+                    'order_numbers': [seq for seq in number_sequences if len(seq) == 18]
+                })
+                request.type = explicit_business_type
+                return await _handle_business_process(request, explicit_business_type)
+            else:
+                # 没有订单号，要求提供充值凭证
+                response_text = get_message_by_language({
+                    "zh": "很抱歉听说您的充值还没有到账。为了更好地帮助您，请提供您的充值凭证截图。",
+                    "en": "I'm sorry to hear that your deposit hasn't arrived yet. To better assist you, please provide a screenshot of your deposit receipt.",
+                    "th": "ขออภัยที่ทราบว่าเงินฝากของคุณยังไม่ได้รับ เพื่อช่วยเหลือคุณได้ดีขึ้น กรุณาให้หลักฐานการฝากเงินของคุณ",
+                    "tl": "Pasensya na na marinig na hindi pa dumarating ang inyong deposit. Para makatulong sa inyo ng mas maayos, magbigay po ng screenshot ng inyong deposit receipt."
+                }, request.language)
+                
+                return ProcessingResult(
+                    text=response_text,
+                    stage=ResponseStage.WORKING.value,
+                    transfer_human=0,
+                    message_type="S001"
+                )
+        
+        elif explicit_business_type == "S002":  # 提现没到账
+            # 检查是否已经包含订单号
+            import re
+            number_sequences = re.findall(r'\d+', str(request.messages))
+            has_18_digit_order = any(len(seq) == 18 for seq in number_sequences)
+            
+            if has_18_digit_order:
+                # 如果已有订单号，直接进行订单查询流程
+                logger.info(f"提现没到账问题包含订单号，直接查询", extra={
+                    'session_id': request.session_id,
+                    'order_numbers': [seq for seq in number_sequences if len(seq) == 18]
+                })
+                request.type = explicit_business_type
+                return await _handle_business_process(request, explicit_business_type)
+            else:
+                # 没有订单号，直接询问订单号
+                response_text = get_message_by_language({
+                    "zh": "很抱歉听说您的提现还没有到账。请提供您的提现订单号，这样我可以帮您查询状态。",
+                    "en": "I'm sorry to hear that your withdrawal hasn't arrived yet. Please provide your withdrawal order number so I can check the status for you.",
+                    "th": "ขออภัยที่ทราบว่าเงินถอนของคุณยังไม่ได้รับ กรุณาให้หมายเลขคำสั่งถอนเงินของคุณ เพื่อที่ฉันจะได้ตรวจสอบสถานะให้คุณ",
+                    "tl": "Pasensya na na marinig na hindi pa dumarating ang inyong withdrawal. Magbigay po ng inyong withdrawal order number para macheck ko ang status para sa inyo."
+                }, request.language)
+                
+                return ProcessingResult(
+                    text=response_text,
+                    stage=ResponseStage.WORKING.value,
+                    transfer_human=0,
+                    message_type="S002"
+                )
     
     # 然后检查是否为模糊的deposit/withdrawal询问
     ambiguous_type = await check_ambiguous_inquiry(str(request.messages), request.language)
@@ -584,21 +643,28 @@ async def _build_response(request: MessageRequest, result: ProcessingResult, sta
         'target_language': request.language
     })
     
+    # 构建metadata，包含TG通知状态
+    metadata = {
+        "intent": response_type,
+        "timestamp": time.time(),
+        "conversation_rounds": conversation_rounds,
+        "max_rounds": Constants.MAX_CONVERSATION_ROUNDS,
+        "has_preset_type": request.type is not None,
+        "processing_time": round(time.time() - start_time, 3),
+        "language_guaranteed": True  # 标记已应用语言保障机制
+    }
+    
+    # 如果有TG通知状态，添加到metadata中
+    if result.telegram_notification:
+        metadata["telegram_notification"] = result.telegram_notification
+    
     return MessageResponse(
         session_id=request.session_id,
         status="success",
         response=final_response_text,
         stage=result.stage,
         images=result.images,
-        metadata={
-            "intent": response_type,
-            "timestamp": time.time(),
-            "conversation_rounds": conversation_rounds,
-            "max_rounds": Constants.MAX_CONVERSATION_ROUNDS,
-            "has_preset_type": request.type is not None,
-            "processing_time": round(time.time() - start_time, 3),
-            "language_guaranteed": True  # 标记已应用语言保障机制
-        },
+        metadata=metadata,
         site=request.site,
         type=response_type,
         transfer_human=result.transfer_human
@@ -760,6 +826,8 @@ async def _handle_s001_process(request: MessageRequest, stage_number: int, workf
             # TG推送截图+订单号
             from src.logging_config import get_logger
             logger = get_logger("chatai-api")
+            
+            telegram_notification = None
             try:
                 from src.telegram import send_to_telegram
                 config = get_config()
@@ -767,15 +835,35 @@ async def _handle_s001_process(request: MessageRequest, stage_number: int, workf
                 chat_id = tg_conf.get("payment_failed_chat_id", "")
                 bot_token = config.get("telegram_bot_token", "")
                 msg = f"充值异常\n用户ID: {user_id}\n订单号: {order_no}\n状态: {status}"
-                await send_to_telegram([request.images[0]], bot_token, chat_id, username=user_id, custom_message=msg)
-                logger.info(f"充值异常已推送TG", extra={"order_no": order_no, "user_id": user_id})
+                
+                # 初始化TG通知结果
+                telegram_notification = {
+                    "sent": False,
+                    "notification_type": "recharge_exception",  
+                    "chat_id": chat_id,
+                    "message": msg,
+                    "error": None,
+                    "has_image": bool(request.images)
+                }
+                
+                if bot_token and chat_id:
+                    await send_to_telegram([request.images[0]], bot_token, chat_id, username=user_id, custom_message=msg)
+                    telegram_notification["sent"] = True
+                    logger.info(f"充值异常已推送TG", extra={"order_no": order_no, "user_id": user_id})
+                else:
+                    telegram_notification["error"] = "Telegram配置不完整"
+                    
             except Exception as e:
+                if telegram_notification:
+                    telegram_notification["error"] = str(e)
                 logger.error(f"TG推送失败", extra={"order_no": order_no, "error": str(e)})
+                
             return ProcessingResult(
                 text="您的充值订单存在异常，已为您转接人工客服。",
                 transfer_human=1,
                 stage=ResponseStage.FINISH.value,
-                message_type=BusinessType.RECHARGE_QUERY.value
+                message_type=BusinessType.RECHARGE_QUERY.value,
+                telegram_notification=telegram_notification
             )
         else:
             return ProcessingResult(
@@ -1202,8 +1290,9 @@ async def _process_withdrawal_status(status: str, status_messages: Dict, workflo
         status, ("withdrawal_issue", ResponseStage.FINISH.value, 1, False)
     )
     # 发送TG通知（如果需要）
+    telegram_notification = None
     if needs_telegram:
-        await _send_telegram_notification(config, request, extract_order_no(request.messages, request.history), status)
+        telegram_notification = await _send_telegram_notification(config, request, extract_order_no(request.messages, request.history), status)
     # 提现成功，追问用户是否收到款项
     if status == "Withdrawal successful":
         response_text = get_message_by_language(status_messages.get("withdrawal_successful", {}), request.language)
@@ -1213,7 +1302,8 @@ async def _process_withdrawal_status(status: str, status_messages: Dict, workflo
             stage=stage,
             transfer_human=0,
             images=workflow.get("4", {}).get("response", {}).get("images", []),
-            message_type=BusinessType.WITHDRAWAL_QUERY.value
+            message_type=BusinessType.WITHDRAWAL_QUERY.value,
+            telegram_notification=telegram_notification
         )
     response_text = get_message_by_language(
         status_messages.get(message_key, {}), 
@@ -1228,13 +1318,24 @@ async def _process_withdrawal_status(status: str, status_messages: Dict, workflo
         images=response_images,
         stage=stage,
         transfer_human=transfer_human,
-        message_type=BusinessType.WITHDRAWAL_QUERY.value
+        message_type=BusinessType.WITHDRAWAL_QUERY.value,
+        telegram_notification=telegram_notification
     )
     return _add_follow_up_to_result(result, request.language)
 
 
-async def _send_telegram_notification(config: Dict, request: MessageRequest, order_no: str, status: str) -> None:
-    """发送Telegram通知"""
+async def _send_telegram_notification(config: Dict, request: MessageRequest, order_no: str, status: str) -> Dict[str, Any]:
+    """
+    发送Telegram通知
+    
+    Returns:
+        Dict包含发送状态信息：
+        - sent: bool, 是否成功发送
+        - notification_type: str, 通知类型
+        - chat_id: str, 目标chat_id
+        - message: str, 发送的消息内容
+        - error: str, 错误信息（如果发送失败）
+    """
     bot_token = config.get("telegram_bot_token", "")
     telegram_config = config.get("telegram_notifications", {})
     
@@ -1253,6 +1354,15 @@ async def _send_telegram_notification(config: Dict, request: MessageRequest, ord
         tg_message = f"⚠️ 异常状态\n用户ID: {request.user_id}\n订单号: {order_no}\n状态: {status}"
         notification_type = "payment_failed"
     
+    # 初始化返回结果
+    result = {
+        "sent": False,
+        "notification_type": notification_type,
+        "chat_id": chat_id,
+        "message": tg_message,
+        "error": None
+    }
+    
     if bot_token and chat_id:
         try:
             logger.info(f"发送Telegram通知", extra={
@@ -1264,7 +1374,14 @@ async def _send_telegram_notification(config: Dict, request: MessageRequest, ord
                 'notification_type': notification_type
             })
             await send_to_telegram([], bot_token, chat_id, username=request.user_id, custom_message=tg_message)
+            result["sent"] = True
+            logger.info(f"Telegram通知发送成功", extra={
+                'session_id': request.session_id,
+                'notification_type': notification_type,
+                'chat_id': chat_id
+            })
         except Exception as e:
+            result["error"] = str(e)
             logger.error(f"TG异常通知发送失败", extra={
                 'session_id': request.session_id,
                 'status': status,
@@ -1272,6 +1389,7 @@ async def _send_telegram_notification(config: Dict, request: MessageRequest, ord
                 'error': str(e)
             })
     else:
+        result["error"] = "Telegram通知配置不完整"
         logger.warning(f"Telegram通知配置不完整，跳过发送", extra={
             'session_id': request.session_id,
             'status': status,
@@ -1279,6 +1397,8 @@ async def _send_telegram_notification(config: Dict, request: MessageRequest, ord
             'has_chat_id': bool(chat_id),
             'notification_type': notification_type
         })
+    
+    return result
 
 
 async def _handle_s003_process(request: MessageRequest, stage_number: int, 
@@ -2624,14 +2744,14 @@ async def check_explicit_not_received_inquiry(messages: str, language: str) -> O
     explicit_not_received_patterns = {
         "deposit": {
             "zh": ["充值没到账", "充值未到账", "充值没收到", "存款没到账", "存款未到账", "deposit没到账", "deposit没收到", "充钱没到账"],
-            "en": ["deposit not received", "deposit didn't arrive", "haven't received deposit", "didn't get deposit", "deposit missing", "deposit not credited", "i don't receive my deposit", "i dont receive my deposit"],
+            "en": ["deposit not received", "deposit not receive", "deposit didn't arrive", "haven't received deposit", "didn't get deposit", "deposit missing", "deposit not credited", "i don't receive my deposit", "i dont receive my deposit", "deposit no receive", "deposit didn't come"],
             "th": ["เงินฝากไม่ได้รับ", "ฝากเงินแล้วไม่ถึง", "deposit ไม่ได้รับ"],
             "tl": ["deposit hindi natatanggap", "hindi natatanggap ang deposit", "walang natanggap na deposit", "hindi pumasok deposit", "hindi dumating deposit", "hindi pa pumasok deposit", "deposit ko hindi pumasok"],
             "ja": ["入金が届いていない", "入金が受け取れない", "depositが届いていない"]
         },
         "withdrawal": {
             "zh": ["提现没到账", "提现未到账", "提现没收到", "出金没到账", "出金未到账", "withdrawal没到账", "withdrawal没收到", "取钱没到账"],
-            "en": ["withdrawal not received", "withdrawal didn't arrive", "haven't received withdrawal", "didn't get withdrawal", "withdrawal missing", "withdrawal not credited", "i don't receive my withdrawal", "i dont receive my withdrawal"],
+            "en": ["withdrawal not received", "withdrawal not receive", "withdrawal didn't arrive", "haven't received withdrawal", "didn't get withdrawal", "withdrawal missing", "withdrawal not credited", "i don't receive my withdrawal", "i dont receive my withdrawal", "withdrawal no receive", "withdrawal didn't come"],
             "th": ["เงินถอนไม่ได้รับ", "ถอนเงินแล้วไม่ถึง", "withdrawal ไม่ได้รับ"],
             "tl": ["withdrawal hindi natatanggap", "hindi natatanggap ang withdrawal", "walang natanggap na withdrawal", "hindi pumasok withdrawal", "hindi dumating withdrawal", "hindi pa pumasok withdrawal", "withdrawal ko hindi pumasok"],
             "ja": ["出金が届いていない", "出金が受け取れない", "withdrawalが届いていない"]
@@ -2690,7 +2810,7 @@ async def check_ambiguous_inquiry(messages: str, language: str) -> Optional[str]
     # 明确的查询关键词，这些不算模糊询问
     specific_keywords = {
         "zh": ["没到账", "未到账", "没收到", "没有到", "什么时候到", "怎么操作", "如何操作", "订单号", "状态", "查询", "充值没到账", "充值未到账", "充值没收到", "提现没到账", "提现未到账", "提现没收到"],
-        "en": ["not received", "haven't received", "didn't receive", "when will", "how to", "order number", "status", "check", "deposit not received", "deposit didn't arrive", "withdrawal not received", "withdrawal didn't arrive", "i don't receive", "i dont receive"],
+        "en": ["not received", "not receive", "haven't received", "didn't receive", "when will", "how to", "order number", "status", "check", "deposit not received", "deposit not receive", "deposit didn't arrive", "withdrawal not received", "withdrawal not receive", "withdrawal didn't arrive", "i don't receive", "i dont receive", "no receive", "didn't come"],
         "th": ["ไม่ได้รับ", "ยังไม่ได้", "เมื่อไหร่", "วิธีการ", "หมายเลขคำสั่ง", "สถานะ", "เงินฝากไม่ได้รับ", "เงินถอนไม่ได้รับ"],
         "tl": ["hindi natatanggap", "hindi pa", "kailan", "paano", "order number", "status", "deposit hindi natatanggap", "withdrawal hindi natatanggap", "hindi pumasok", "hindi dumating"],
         "ja": ["届いていない", "受け取っていない", "いつ", "方法", "注文番号", "状況", "入金が届いていない", "出金が届いていない"]

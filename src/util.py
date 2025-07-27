@@ -63,13 +63,16 @@ class MessageResponse(BaseModel):
 
 # 新增：通用意图识别请求模型
 class IntentRecognitionRequest(BaseModel):
-    text: str
-    intents: list[str]
+    session_id: str  # 会话标识符
+    user_id: str     # 用户ID
+    text: str        # 用户输入的文本
+    intents: List[str] = []  # 可选的意图列表
+    token: str       # 用户身份验证Token
 
 # 新增：通用意图识别响应模型
 class IntentRecognitionResponse(BaseModel):
-    text: str
-    intent: str
+    text: str        # 原始用户输入文本
+    intent: str      # 识别出的意图，无法识别返回空字符串
 
 
 # 通用调用其他后端服务接口的方法

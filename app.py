@@ -23,6 +23,7 @@ from src.util import MessageRequest, MessageResponse
 from src.util import IntentRecognitionRequest, IntentRecognitionResponse
 from src.util import call_openapi_model
 from src.logging_config import init_logging, get_logger, log_request
+from src.auth import verify_token
 
 # 定义lifespan上下文管理器
 @asynccontextmanager
@@ -222,29 +223,157 @@ async def api_process_message(request: MessageRequest):
         }, exc_info=True)
         raise HTTPException(status_code=500, detail=f"消息处理失败: {str(e)}") from e
 
-# 通用意图识别接口
+# 预定义意图列表
+DEFAULT_INTENTS = [
+    "没有收到款项",
+    "收到款项订单已回调",
+    "等待1-7个工作日退款", 
+    "提供转账人信息",
+    "提现处理中",
+    "已出款成功",
+    "重新提交提现申请",
+    "等待第三方支付",
+    "客户收款卡已限额",
+    "客户收款卡号错误",
+    "客户收款银行维护",
+    "修改客户收款卡",
+    "客户卡号异常",
+    "请日切后重新提交订单",
+    "订单款项已回冲",
+    "订单已重新出款"
+]
+
+# 意图识别接口
 @app.post("/recognize_intent", response_model=IntentRecognitionResponse)
 async def recognize_intent(request: IntentRecognitionRequest):
-    text = request.text or ""
-    intents = request.intents or []
-    if not text or not intents:
-        return IntentRecognitionResponse(text=text, intent="")
-    # 构造大模型提示词
-    prompt = (
-        "你是一个意图识别助手。请从下面的意图列表中选择最符合用户输入的意图，只返回意图本身，不要返回其他内容。\n"
-        f"用户输入: {text}\n"
-        f"可选意图: {', '.join(intents)}\n"
-        "请只返回最匹配的意图字符串，如果没有合适的意图请返回空字符串。"
-    )
+    """意图识别接口，支持自定义意图列表或使用默认意图列表"""
+    logger = get_logger("chatai-api")
+    request_start_time = time.time()
+    
     try:
-        llm_response = await call_openapi_model(prompt=prompt)
-        intent = llm_response.strip().split('\n')[0]  # 只取第一行，防止多余内容
-        if intent not in intents:
-            intent = ""
-        return IntentRecognitionResponse(text=text, intent=intent)
+        logger.info("开始处理意图识别请求", extra={
+            'session_id': request.session_id,
+            'user_id': request.user_id,
+            'text_length': len(request.text) if request.text else 0,
+            'intents_count': len(request.intents) if request.intents else 0
+        })
+        
+        # 验证token
+        is_valid, token_user_id, error_msg = verify_token(request.token)
+        if not is_valid:
+            logger.warning("Token验证失败", extra={
+                'session_id': request.session_id,
+                'user_id': request.user_id,
+                'error': error_msg
+            })
+            raise HTTPException(status_code=401, detail=f"Token验证失败: {error_msg}")
+        
+        # 验证token中的user_id与请求中的user_id是否一致
+        if token_user_id != request.user_id:
+            logger.warning("Token中的用户ID与请求不符", extra={
+                'session_id': request.session_id,
+                'request_user_id': request.user_id,
+                'token_user_id': token_user_id
+            })
+            raise HTTPException(status_code=403, detail="Token中的用户ID与请求不符")
+        
+        text = request.text or ""
+        # 如果用户没有提供意图列表，使用默认意图列表
+        intents = request.intents if request.intents else DEFAULT_INTENTS
+        
+        # 如果没有文本，直接返回空意图
+        if not text:
+            logger.info("文本为空，返回空意图", extra={
+                'session_id': request.session_id,
+                'user_id': request.user_id,
+                'has_text': bool(text)
+            })
+            return IntentRecognitionResponse(text=text, intent="")
+        
+        # 构造大模型提示词
+        prompt = (
+            "你是一个意图识别助手。请从下面的意图列表中选择最符合用户输入的意图，只返回意图本身，不要返回其他内容。\n"
+            f"用户输入: {text}\n"
+            f"可选意图: {', '.join(intents)}\n"
+            "请只返回最匹配的意图字符串，如果没有合适的意图请返回空字符串。"
+        )
+        
+        try:
+            llm_response = await call_openapi_model(prompt=prompt)
+            intent = llm_response.strip().split('\n')[0]  # 只取第一行，防止多余内容
+            
+            # 验证返回的意图是否在候选列表中
+            if intent not in intents:
+                intent = ""
+                
+            processing_time = time.time() - request_start_time
+            
+            logger.info("意图识别完成", extra={
+                'session_id': request.session_id,
+                'user_id': request.user_id,
+                'text': text,
+                'recognized_intent': intent,
+                'processing_time': round(processing_time, 3),
+                'intent_found': bool(intent),
+                'used_default_intents': not bool(request.intents)
+            })
+            
+            return IntentRecognitionResponse(text=text, intent=intent)
+            
+        except Exception as llm_error:
+            processing_time = time.time() - request_start_time
+            logger.error("LLM调用失败，返回空意图", extra={
+                'session_id': request.session_id,
+                'user_id': request.user_id,
+                'error': str(llm_error),
+                'processing_time': round(processing_time, 3)
+            }, exc_info=True)
+            # LLM调用失败时返回空意图
+            return IntentRecognitionResponse(text=text, intent="")
+            
+    except HTTPException:
+        # 重新抛出HTTP异常
+        raise
     except Exception as e:
-        # LLM调用失败时返回空意图
-        return IntentRecognitionResponse(text=text, intent="")
+        processing_time = time.time() - request_start_time
+        logger.error("意图识别处理失败", extra={
+            'session_id': getattr(request, 'session_id', 'unknown'),
+            'user_id': getattr(request, 'user_id', 'unknown'),
+            'error': str(e),
+            'error_type': type(e).__name__,
+            'processing_time': round(processing_time, 3)
+        }, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"意图识别处理失败: {str(e)}") from e
+
+# 获取可用意图列表接口
+@app.get("/available_intents")
+async def api_get_available_intents():
+    """
+    获取可用的意图列表
+    """
+    logger = get_logger("chatai-api")
+    
+    try:
+        intents = DEFAULT_INTENTS.copy()
+        
+        logger.info("获取可用意图列表", extra={
+            'intents_count': len(intents),
+            'operation': 'get_available_intents'
+        })
+        
+        return {
+            "status": "success",
+            "intents": intents,
+            "count": len(intents),
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error("获取意图列表失败", extra={
+            'error': str(e),
+            'error_type': type(e).__name__
+        }, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取意图列表失败: {str(e)}") from e
 
 # 健康检查接口
 @app.get("/health")
