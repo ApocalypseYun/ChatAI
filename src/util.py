@@ -60,11 +60,14 @@ class MessageResponse(BaseModel):
     site: int = 1
     type: Optional[str] = None
     transfer_human: int = 0
+    tg_action_required: bool = False
+    tg_query_info: List[Dict[str, Any]] = Field(default_factory=list)
 
 # 新增：通用意图识别请求模型
 class IntentRecognitionRequest(BaseModel):
     session_id: str  # 会话标识符
     user_id: str     # 用户ID
+    language: Optional[str] = None  # 用户语言（可选）
     text: str        # 用户输入的文本
     intents: List[str] = []  # 可选的意图列表
     token: str       # 用户身份验证Token

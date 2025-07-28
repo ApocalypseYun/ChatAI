@@ -46,13 +46,16 @@ class ResponseStage(Enum):
 class ProcessingResult:
     """处理结果的数据类"""
     def __init__(self, text: str = "", images: List[str] = None, stage: str = ResponseStage.WORKING.value, 
-                 transfer_human: int = 0, message_type: str = "", telegram_notification: Optional[Dict[str, Any]] = None):
+                 transfer_human: int = 0, message_type: str = "", telegram_notification: Optional[Dict[str, Any]] = None,
+                 tg_action_required: bool = False, tg_query_info: Optional[List[Dict[str, Any]]] = None):
         self.text = text
         self.images = images or []
         self.stage = stage
         self.transfer_human = transfer_human
         self.message_type = message_type
         self.telegram_notification = telegram_notification
+        self.tg_action_required = tg_action_required
+        self.tg_query_info = tg_query_info or []
 
 
 async def process_message(request: MessageRequest) -> MessageResponse:
@@ -667,7 +670,9 @@ async def _build_response(request: MessageRequest, result: ProcessingResult, sta
         metadata=metadata,
         site=request.site,
         type=response_type,
-        transfer_human=result.transfer_human
+        transfer_human=result.transfer_human,
+        tg_action_required=result.tg_action_required,
+        tg_query_info=result.tg_query_info
     )
 
 
@@ -857,13 +862,29 @@ async def _handle_s001_process(request: MessageRequest, stage_number: int, workf
                 if telegram_notification:
                     telegram_notification["error"] = str(e)
                 logger.error(f"TG推送失败", extra={"order_no": order_no, "error": str(e)})
+            
+            # 构建TG查询信息（充值异常场景）
+            tg_query_info = []
+            if order_no:
+                # 添加充值订单的TG查询信息
+                tg_info = _build_tg_query_info(
+                    order_id=order_no,
+                    business_type=1,  # 1:充值
+                    tg_type=1,  # 1:后台TG
+                    images=request.images[0] if request.images else "",  # 充值凭证图片
+                    institution="",  # 可以从API获取三方机构名
+                    ref=""  # 从OCR结果获取
+                )
+                tg_query_info.append(tg_info)
                 
             return ProcessingResult(
                 text="您的充值订单存在异常，已为您转接人工客服。",
                 transfer_human=1,
                 stage=ResponseStage.FINISH.value,
                 message_type=BusinessType.RECHARGE_QUERY.value,
-                telegram_notification=telegram_notification
+                telegram_notification=telegram_notification,
+                tg_action_required=bool(tg_query_info),
+                tg_query_info=tg_query_info
             )
         else:
             return ProcessingResult(
@@ -1243,11 +1264,28 @@ async def _handle_order_query_s002(request: MessageRequest, status_messages: Dic
                 message_type=BusinessType.WITHDRAWAL_QUERY.value
             )
         else:
-            # 系统错误，转人工
+            # 系统错误，转人工，需要TG查询
+            # 构建TG查询信息（以提现为例）
+            tg_query_info = []
+            if order_no:
+                # 根据实际需求可以添加多个订单
+                tg_info = _build_tg_query_info(
+                    order_id=order_no,
+                    business_type=2,  # 2:提现
+                    tg_type=1,  # 1:后台TG
+                    images="",  # 提现没有图片
+                    institution="",  # 可以从API获取
+                    ref=""  # 提现没有ref
+                )
+                tg_query_info.append(tg_info)
+            
             return ProcessingResult(
                 text=error_message,
                 transfer_human=1,
-                stage=ResponseStage.FINISH.value
+                stage=ResponseStage.FINISH.value,
+                message_type=BusinessType.WITHDRAWAL_QUERY.value,
+                tg_action_required=bool(tg_query_info),
+                tg_query_info=tg_query_info
             )
     
     # 处理查询结果
@@ -1322,6 +1360,32 @@ async def _process_withdrawal_status(status: str, status_messages: Dict, workflo
         telegram_notification=telegram_notification
     )
     return _add_follow_up_to_result(result, request.language)
+
+
+def _build_tg_query_info(order_id: str, business_type: int, tg_type: int = 1, 
+                        images: str = "", institution: str = "", ref: str = "") -> Dict[str, Any]:
+    """
+    构建TG查询信息
+    
+    Args:
+        order_id: 订单号
+        business_type: 业务类型 1:充值, 2:提现  
+        tg_type: TG类型 1:后台TG, 2:第三方TG
+        images: 发送的充值凭证图片，只有充值有，提现时发空字符串
+        institution: 三方机构名
+        ref: AI图片识别的参考号
+        
+    Returns:
+        TG查询信息字典
+    """
+    return {
+        "order_id": order_id,
+        "business_type": business_type,
+        "tg_type": tg_type,
+        "images": images,
+        "institution": institution,
+        "ref": ref
+    }
 
 
 async def _send_telegram_notification(config: Dict, request: MessageRequest, order_no: str, status: str) -> Dict[str, Any]:
@@ -1422,16 +1486,27 @@ async def _handle_s003_process(request: MessageRequest, stage_number: int,
     if str(stage_number) in ["1", "2"]:
         return await _handle_activity_query(request, status_messages)
     else:
-        # 其他阶段，转人工处理
+        # 其他阶段，转人工处理，可能需要TG查询
         response_text = get_message_by_language(
             status_messages.get("query_failed", {}), 
             request.language
         )
+        
+        # 根据实际业务需要决定是否需要TG查询
+        # 这里作为示例，当response_text包含"查询"时才需要TG查询
+        tg_query_info = []
+        tg_action_required = False
+        
+        # 在实际场景中，这里可以根据具体的业务逻辑来判断是否需要TG查询
+        # 比如从request中获取相关订单信息等
+        
         return ProcessingResult(
             text=response_text,
             transfer_human=1,
             stage=ResponseStage.FINISH.value,
-            message_type=BusinessType.ACTIVITY_QUERY.value
+            message_type=BusinessType.ACTIVITY_QUERY.value,
+            tg_action_required=tg_action_required,
+            tg_query_info=tg_query_info
         )
 
 

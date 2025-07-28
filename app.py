@@ -254,6 +254,7 @@ async def recognize_intent(request: IntentRecognitionRequest):
         logger.info("开始处理意图识别请求", extra={
             'session_id': request.session_id,
             'user_id': request.user_id,
+            'language': request.language,
             'text_length': len(request.text) if request.text else 0,
             'intents_count': len(request.intents) if request.intents else 0
         })
@@ -290,13 +291,44 @@ async def recognize_intent(request: IntentRecognitionRequest):
             })
             return IntentRecognitionResponse(text=text, intent="")
         
-        # 构造大模型提示词
-        prompt = (
-            "你是一个意图识别助手。请从下面的意图列表中选择最符合用户输入的意图，只返回意图本身，不要返回其他内容。\n"
-            f"用户输入: {text}\n"
-            f"可选意图: {', '.join(intents)}\n"
-            "请只返回最匹配的意图字符串，如果没有合适的意图请返回空字符串。"
-        )
+        # 构造大模型提示词，根据语言调整
+        language = request.language or "zh"  # 默认中文
+        
+        if language == "en":
+            prompt = (
+                "You are an intent recognition assistant. Please select the most matching intent from the intent list below for the user input. Only return the intent itself, do not return other content.\n"
+                f"User input: {text}\n"
+                f"Available intents: {', '.join(intents)}\n"
+                "Please only return the most matching intent string. If no suitable intent is found, return an empty string."
+            )
+        elif language == "th":
+            prompt = (
+                "คุณเป็นผู้ช่วยในการจดจำความตั้งใจ กรุณาเลือกความตั้งใจที่ตรงกับการป้อนข้อมูลของผู้ใช้มากที่สุดจากรายการความตั้งใจด้านล่าง ส่งคืนเฉพาะความตั้งใจเท่านั้น ไม่ต้องส่งคืนเนื้อหาอื่น\n"
+                f"การป้อนข้อมูลของผู้ใช้: {text}\n"
+                f"ความตั้งใจที่มีอยู่: {', '.join(intents)}\n"
+                "กรุณาส่งคืนเฉพาะสตริงความตั้งใจที่ตรงกันมากที่สุด หากไม่พบความตั้งใจที่เหมาะสม ให้ส่งคืนสตริงว่าง"
+            )
+        elif language == "tl":
+            prompt = (
+                "Ikaw ay isang intent recognition assistant. Mangyaring piliin ang pinakatugmang intent mula sa listahan ng intent sa ibaba para sa input ng user. Ibalik lang ang intent mismo, huwag magbalik ng ibang content.\n"
+                f"Input ng user: {text}\n"
+                f"Available na mga intent: {', '.join(intents)}\n"
+                "Mangyaring ibalik lang ang pinakatugmang intent string. Kung walang suitable na intent, ibalik ang empty string."
+            )
+        elif language == "ja":
+            prompt = (
+                "あなたは意図認識アシスタントです。以下の意図リストからユーザー入力に最も適合する意図を選択してください。意図そのもののみを返し、その他の内容は返さないでください。\n"
+                f"ユーザー入力: {text}\n"
+                f"利用可能な意図: {', '.join(intents)}\n"
+                "最も適合する意図文字列のみを返してください。適切な意図が見つからない場合は、空文字列を返してください。"
+            )
+        else:  # 默认中文
+            prompt = (
+                "你是一个意图识别助手。请从下面的意图列表中选择最符合用户输入的意图，只返回意图本身，不要返回其他内容。\n"
+                f"用户输入: {text}\n"
+                f"可选意图: {', '.join(intents)}\n"
+                "请只返回最匹配的意图字符串，如果没有合适的意图请返回空字符串。"
+            )
         
         try:
             llm_response = await call_openapi_model(prompt=prompt)
