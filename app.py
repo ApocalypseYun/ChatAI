@@ -244,7 +244,7 @@ DEFAULT_INTENTS = [
 ]
 
 # 意图识别接口
-@app.post("/recognize_intent", response_model=IntentRecognitionResponse)
+@app.post("/chat/recognize_intent", response_model=IntentRecognitionResponse)
 async def recognize_intent(request: IntentRecognitionRequest):
     """意图识别接口，支持自定义意图列表或使用默认意图列表"""
     logger = get_logger("chatai-api")
@@ -290,6 +290,10 @@ async def recognize_intent(request: IntentRecognitionRequest):
                 'has_text': bool(text)
             })
             return IntentRecognitionResponse(text=text, intent="")
+        
+        # 检查文本是否直接在意图列表中（后端会把所有回复都带过来）
+        if text in intents:
+            return IntentRecognitionResponse(text=text, intent=text)
         
         # 构造大模型提示词，根据语言调整
         language = request.language or "zh"  # 默认中文

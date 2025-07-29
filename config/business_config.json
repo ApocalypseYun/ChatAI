@@ -170,7 +170,7 @@
                     "step": "不知道【订单编号】",
                     "response": {
                         "text": "按照下面图片的指引进行操作",
-                        "images": ["https://img.lodirnd.com/lodi/withdrawalOrder.webp"]
+                        "images": ["https://img.lodirnd.com/lodi/withdrawOrder.webp"]
                     }
                 },
                 "3": {
@@ -473,7 +473,7 @@
         "performance_monitoring": true
     },
     "auth": {
-        "secret_key": "ChatAI_Production_Secret_Key_2024_@#$%^&*()",
+        "secret_key": "ChatAI_Production_Secret_Key_2025_@#$%^&*()",
         "token_max_age": 3600,
         "require_token_for_logged_users": true,
         "token_refresh_threshold": 300

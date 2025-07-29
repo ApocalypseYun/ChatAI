@@ -218,7 +218,7 @@ def load_business_config() -> Dict:
                     "step": "不知道【订单编号】",
                     "response": {
                         "text": "按照下面图片的指引进行操作",
-                        "images": ["https://img.lodirnd.com/lodi/withdrawalOrder.webp"]
+                        "images": ["https://img.lodirnd.com/lodi/withdrawOrder.webp"]
                     }
                 },
                 "3": {

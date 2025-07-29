@@ -146,7 +146,7 @@ async def query_user_orders(session_id, user_id, order_type, start_tm, end_tm, s
     Returns:
         dict: 接口返回结果
     """
-    from src.util import call_openapi_model
+    from src.util import call_backend_service
     payload = {
         "site": site,
         "session_id": session_id,
@@ -158,8 +158,10 @@ async def query_user_orders(session_id, user_id, order_type, start_tm, end_tm, s
             "end_tm": end_tm
         }
     }
-    # 将payload序列化为字符串prompt传递
-    return await call_openapi_model(prompt=json.dumps(payload))
+    # 将payload传递给后端API
+    encrypted_data = encrypt_payload(payload)
+    headers = {"Content-Type": "application/json"}
+    return await call_backend_service(url=internal_endpoint, method="POST", json_data={"data": encrypted_data}, headers=headers)
 
 
 def extract_user_orders(api_result):
@@ -168,7 +170,7 @@ def extract_user_orders(api_result):
     Args:
         api_result: A005接口返回的dict
     Returns:
-        list[dict]: 每个订单包含 order_no, status, order_time, pay_name
+        list[dict]: 每个订单包含 order_no, status, order_time, pay_name, amount
     """
     orders = []
     try:
@@ -179,7 +181,8 @@ def extract_user_orders(api_result):
                 "order_no": item.get("order_no"),
                 "status": item.get("status"),
                 "order_time": item.get("order_time"),
-                "pay_name": item.get("pay_name")
+                "pay_name": item.get("pay_name"),
+                "amount": item.get("amount")
             })
     except Exception:
         pass

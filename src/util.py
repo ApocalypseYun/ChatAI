@@ -109,7 +109,7 @@ async def call_backend_service(
     })
     
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(verify=False, timeout=timeout) as client:
             response = await client.request(
                 method=method,
                 url=url,

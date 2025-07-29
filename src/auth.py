@@ -8,7 +8,7 @@ from .config import get_config
 logger = get_logger("chatai-auth")
 
 # 默认密钥，实际使用时应该从配置文件读取
-DEFAULT_SECRET_KEY = "ChatAI_Secret_Key_2024"
+DEFAULT_SECRET_KEY = "ChatAI_Secret_Key_2025"
 
 def generate_token(user_id: str, secret_key: Optional[str] = None, timestamp: Optional[int] = None) -> str:
     """

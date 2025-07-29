@@ -114,13 +114,22 @@ async def process_message(request: MessageRequest) -> MessageResponse:
 
 def _validate_request(request: MessageRequest) -> None:
     """验证请求参数"""
-    if not request.session_id or not request.messages:
-        logger.error(f"请求验证失败：缺少必要字段", extra={
+    # session_id是必需的
+    if not request.session_id:
+        logger.error(f"请求验证失败：缺少session_id", extra={
             'session_id': request.session_id,
-            'has_session_id': bool(request.session_id),
-            'has_messages': bool(request.messages)
+            'has_session_id': bool(request.session_id)
         })
-        raise ValueError("缺少必要字段: session_id, messages")
+        raise ValueError("缺少必要字段: session_id")
+    
+    # messages或images至少要有一个
+    if not request.messages and not (request.images and len(request.images) > 0):
+        logger.error(f"请求验证失败：缺少消息内容", extra={
+            'session_id': request.session_id,
+            'has_messages': bool(request.messages),
+            'has_images': bool(request.images and len(request.images) > 0)
+        })
+        raise ValueError("缺少必要字段: messages 或 images")
     
     # 已登录用户需要验证token
     if request.status == 1:
@@ -197,7 +206,6 @@ async def _process_authenticated_user(request: MessageRequest) -> ProcessingResu
         
         if explicit_business_type == "S001":  # 充值没到账
             # 检查是否已经包含订单号
-            import re
             number_sequences = re.findall(r'\d+', str(request.messages))
             has_18_digit_order = any(len(seq) == 18 for seq in number_sequences)
             
@@ -227,7 +235,6 @@ async def _process_authenticated_user(request: MessageRequest) -> ProcessingResu
         
         elif explicit_business_type == "S002":  # 提现没到账
             # 检查是否已经包含订单号
-            import re
             number_sequences = re.findall(r'\d+', str(request.messages))
             has_18_digit_order = any(len(seq) == 18 for seq in number_sequences)
             
@@ -240,7 +247,28 @@ async def _process_authenticated_user(request: MessageRequest) -> ProcessingResu
                 request.type = explicit_business_type
                 return await _handle_business_process(request, explicit_business_type)
             else:
-                # 没有订单号，直接询问订单号
+                # 没有订单号，引导用户并提供订单号引导图片
+                logger.info(f"提现没到账问题无订单号，引导用户提供", extra={
+                    'session_id': request.session_id,
+                    'user_message': str(request.messages)
+                })
+                
+                # 设置request.type以便后续处理知道业务类型
+                request.type = explicit_business_type
+                
+                # 获取配置中的引导图片
+                config = get_config()
+                business_types = config.get("business_types", {})
+                s002_config = business_types.get("S002", {})
+                workflow = s002_config.get("workflow", {})
+                
+                # 尝试获取订单引导图片
+                order_guide_img = None
+                try:
+                    order_guide_img = workflow.get("1", {}).get("response", {}).get("images", [])[0]
+                except (IndexError, KeyError):
+                    pass
+                
                 response_text = get_message_by_language({
                     "zh": "很抱歉听说您的提现还没有到账。请提供您的提现订单号，这样我可以帮您查询状态。",
                     "en": "I'm sorry to hear that your withdrawal hasn't arrived yet. Please provide your withdrawal order number so I can check the status for you.",
@@ -250,6 +278,7 @@ async def _process_authenticated_user(request: MessageRequest) -> ProcessingResu
                 
                 return ProcessingResult(
                     text=response_text,
+                    images=[order_guide_img] if order_guide_img else [],
                     stage=ResponseStage.WORKING.value,
                     transfer_human=0,
                     message_type="S002"
@@ -378,6 +407,39 @@ async def _get_or_identify_business_type(request: MessageRequest) -> str:
                     })
                     return BusinessType.WITHDRAWAL_QUERY.value
     
+    # 如果用户只发图片不发消息，根据历史对话判断业务类型
+    if not request.messages and request.images and len(request.images) > 0:
+        # 检查历史对话判断业务类型
+        if request.history:
+            for message in request.history:
+                content = message.get("content", "").lower()
+                # 检查充值相关关键词
+                deposit_keywords = ["deposit", "recharge", "充值", "ฝาก", "入金", "mag-deposit", "存款", "充钱"]
+                withdrawal_keywords = ["withdrawal", "withdraw", "提现", "ถอน", "出金", "mag-withdraw", "取钱"]
+                
+                if any(keyword in content for keyword in deposit_keywords):
+                    logger.info(f"用户只发图片，根据历史对话识别为充值查询", extra={
+                        'session_id': request.session_id,
+                        'has_images': True,
+                        'identified_type': BusinessType.RECHARGE_QUERY.value
+                    })
+                    return BusinessType.RECHARGE_QUERY.value
+                elif any(keyword in content for keyword in withdrawal_keywords):
+                    logger.info(f"用户只发图片，根据历史对话识别为提现查询", extra={
+                        'session_id': request.session_id,
+                        'has_images': True,
+                        'identified_type': BusinessType.WITHDRAWAL_QUERY.value
+                    })
+                    return BusinessType.WITHDRAWAL_QUERY.value
+        
+        # 如果无法从历史对话判断，默认为充值查询（因为图片通常是充值凭证）
+        logger.info(f"用户只发图片，无历史对话上下文，默认识别为充值查询", extra={
+            'session_id': request.session_id,
+            'has_images': True,
+            'identified_type': BusinessType.RECHARGE_QUERY.value
+        })
+        return BusinessType.RECHARGE_QUERY.value
+    
     # 进行意图识别
     logger.debug(f"未指定业务类型，开始意图识别", extra={
         'session_id': request.session_id,
@@ -388,7 +450,7 @@ async def _get_or_identify_business_type(request: MessageRequest) -> str:
         request.messages, 
         request.history or [], 
         request.language,
-        request.category
+        request.category or {}
     )
     
     logger.info(f"意图识别完成: {message_type}", extra={
@@ -455,7 +517,7 @@ async def _handle_business_process(request: MessageRequest, message_type: str) -
         message_type,
         request.messages,
         request.history or [],
-        request.category  # 传递category信息辅助stage识别
+        request.category or {}  # 传递category信息辅助stage识别
     )
     
     logger.info(f"流程步骤识别完成: stage={stage_number}", extra={
@@ -580,7 +642,7 @@ async def _build_response(request: MessageRequest, result: ProcessingResult, sta
     
     # 语言保障机制：在最终返回前，统一用目标语言重新生成回复
     final_response_text = result.text
-    if result.text and not result.transfer_human:  # 只有非转人工的情况才需要语言保障
+    if result.text and not result.transfer_human and not result.images:  # 只有非转人工且没有图片的情况才需要语言保障
         try:
             # 检查是否是业务查询的状态结果
             is_business_status = response_type in [BusinessType.RECHARGE_QUERY.value, BusinessType.WITHDRAWAL_QUERY.value]
@@ -760,139 +822,100 @@ async def _handle_s001_process(request: MessageRequest, stage_number: int, workf
                 stage=ResponseStage.FINISH.value,
                 message_type=BusinessType.RECHARGE_QUERY.value
             )
-        # 3. 提取金额和时间，A005查单
+        # 3. 提取金额和时间，尝试A005查单
         amount = ocr_result.get("amount")
         pay_time = ocr_result.get("time")
         user_id = getattr(request, "user_id", None)
-        if not (amount and pay_time and user_id):
-            # 关键信息缺失，转人工
-            return ProcessingResult(
-                text="凭证图片识别失败，已为您转接人工客服。",
-                transfer_human=1,
-                stage=ResponseStage.FINISH.value,
-                message_type=BusinessType.RECHARGE_QUERY.value
-            )
-        # 4. 构造A005时间区间（图片时间±1小时）
-        try:
-            dt = datetime.strptime(pay_time, "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            return ProcessingResult(
-                text="凭证图片时间格式异常，已为您转接人工客服。",
-                transfer_human=1,
-                stage=ResponseStage.FINISH.value,
-                message_type=BusinessType.RECHARGE_QUERY.value
-            )
-        start_tm = (dt - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
-        end_tm = (dt + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
-        from src.request_internal import query_user_orders, extract_user_orders
-        a005_result = await query_user_orders(request.session_id, user_id, 1, start_tm, end_tm, request.site)
-        orders = extract_user_orders(a005_result)
-        # 5. 匹配订单（金额、时间、状态）
-        matched_order = None
-        for order in sorted(orders, key=lambda x: x["order_time"], reverse=True):
-            if order["status"] in ["pending", "completed", "待支付", "已完成"] and order["pay_name"] and amount in str(order):
-                # 时间小于等于图片时间
-                try:
-                    order_dt = datetime.strptime(order["order_time"], "%Y-%m-%d %H:%M:%S")
-                    if order_dt <= dt:
-                        matched_order = order
-                        break
-                except Exception:
-                    continue
-        if not matched_order:
-            return ProcessingResult(
-                text="未能匹配到您的充值订单，已为您转接人工客服。",
-                transfer_human=1,
-                stage=ResponseStage.FINISH.value,
-                message_type=BusinessType.RECHARGE_QUERY.value
-            )
-        # 6. 用匹配到的订单号A001查状态
-        order_no = matched_order["order_no"]
-        log_api_call("A001_query_recharge_status", request.session_id, order_no=order_no)
-        try:
-            api_result = await query_recharge_status(request.session_id, order_no, request.site)
-        except Exception as e:
-            api_result = None
-        is_valid, error_message, error_type = validate_session_and_handle_errors(api_result, status_messages, request.language)
-        if not is_valid:
-            return ProcessingResult(
-                text=error_message,
-                transfer_human=1,
-                stage=ResponseStage.FINISH.value,
-                message_type=BusinessType.RECHARGE_QUERY.value
-            )
-        extracted_data = extract_recharge_status(api_result)
-        # 7. 状态分支
-        status = extracted_data.get("status")
-        if status in ["Recharge successful", "canceled", "已取消", "成功"]:
-            # 正常返回
-            return await _process_recharge_status(status, status_messages, workflow, request)
-        elif status in ["pending", "rejected", "Recharge failed", "失败", "已拒绝"]:
-            # TG推送截图+订单号
-            from src.logging_config import get_logger
-            logger = get_logger("chatai-api")
-            
-            telegram_notification = None
+        
+        # 如果能提取到完整信息，使用A005查询
+        if amount and pay_time and user_id:
             try:
-                from src.telegram import send_to_telegram
-                config = get_config()
-                tg_conf = config.get("telegram_notifications", {})
-                chat_id = tg_conf.get("payment_failed_chat_id", "")
-                bot_token = config.get("telegram_bot_token", "")
-                msg = f"充值异常\n用户ID: {user_id}\n订单号: {order_no}\n状态: {status}"
+                # 4. 构造A005时间区间（图片时间-2小时到图片时间）
+                dt = datetime.strptime(pay_time, "%Y-%m-%d %H:%M:%S")
+                start_tm = (dt - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+                end_tm = dt.strftime("%Y-%m-%d %H:%M:%S")
+                from src.request_internal import query_user_orders, extract_user_orders
+                a005_result = await query_user_orders(request.session_id, user_id, 1, start_tm, end_tm, request.site)
+                orders = extract_user_orders(a005_result)
                 
-                # 初始化TG通知结果
-                telegram_notification = {
-                    "sent": False,
-                    "notification_type": "recharge_exception",  
-                    "chat_id": chat_id,
-                    "message": msg,
-                    "error": None,
-                    "has_image": bool(request.images)
-                }
+                # 5. 匹配订单（金额、时间、状态）
+                logger.info(f"使用A005查询到{len(orders)}个订单", extra={
+                    'session_id': request.session_id,
+                    'amount': amount,
+                    'pay_time': pay_time,
+                    'order_count': len(orders)
+                })
                 
-                if bot_token and chat_id:
-                    await send_to_telegram([request.images[0]], bot_token, chat_id, username=user_id, custom_message=msg)
-                    telegram_notification["sent"] = True
-                    logger.info(f"充值异常已推送TG", extra={"order_no": order_no, "user_id": user_id})
-                else:
-                    telegram_notification["error"] = "Telegram配置不完整"
+                # 匹配符合条件的订单
+                matched_orders = []
+                for order in orders:
+                    if order["status"] in ["pending", "Recharge failed", "rejected"] and order["pay_name"] and amount in str(order["amount"]):
+                        matched_orders.append(order)
+                
+                # 如果找到匹配的订单，发送所有查询到合规的订单到第三方TG
+                if matched_orders:
+                    try:
+                        from src.telegram import send_to_telegram
+                        config = get_config()
+                        tg_conf = config.get("telegram_notifications", {})
+                        chat_id = tg_conf.get("payment_failed_chat_id", "")
+                        bot_token = config.get("telegram_bot_token", "")
+                        msg = f"充值查询到合规订单\n用户ID: {user_id}\n订单信息: {matched_orders}"
+                        
+                        if bot_token and chat_id:
+                            await send_to_telegram([request.images[0]], bot_token, chat_id, username=user_id, custom_message=msg)
+                            
+                    except Exception as e:
+                        logger.error(f"TG推送失败", extra={"error": str(e)})
                     
-            except Exception as e:
-                if telegram_notification:
-                    telegram_notification["error"] = str(e)
-                logger.error(f"TG推送失败", extra={"order_no": order_no, "error": str(e)})
-            
-            # 构建TG查询信息（充值异常场景）
-            tg_query_info = []
-            if order_no:
-                # 添加充值订单的TG查询信息
-                tg_info = _build_tg_query_info(
-                    order_id=order_no,
-                    business_type=1,  # 1:充值
-                    tg_type=1,  # 1:后台TG
-                    images=request.images[0] if request.images else "",  # 充值凭证图片
-                    institution="",  # 可以从API获取三方机构名
-                    ref=""  # 从OCR结果获取
-                )
-                tg_query_info.append(tg_info)
+                    # 构建TG查询信息（充值查询场景）
+                    tg_query_info = []
+                    for order in matched_orders:
+                        tg_info = _build_tg_query_info(
+                            order_id=order["order_no"],
+                            business_type=1,
+                            tg_type=2,  # 2:三方TG
+                            images=request.images[0] if request.images else "",
+                            institution="",
+                            ref=""
+                        )
+                        tg_query_info.append(tg_info)
+                    
+                    return ProcessingResult(
+                        text="根据您的凭证找到了充值记录，正在为您查询状态...",
+                        stage=ResponseStage.WORKING.value,
+                        message_type=BusinessType.RECHARGE_QUERY.value,
+                        tg_action_required=bool(tg_query_info),
+                        tg_query_info=tg_query_info
+                    )
                 
-            return ProcessingResult(
-                text="您的充值订单存在异常，已为您转接人工客服。",
-                transfer_human=1,
-                stage=ResponseStage.FINISH.value,
-                message_type=BusinessType.RECHARGE_QUERY.value,
-                telegram_notification=telegram_notification,
-                tg_action_required=bool(tg_query_info),
-                tg_query_info=tg_query_info
-            )
-        else:
-            return ProcessingResult(
-                text="充值订单状态异常，已为您转接人工客服。",
-                transfer_human=1,
-                stage=ResponseStage.FINISH.value,
-                message_type=BusinessType.RECHARGE_QUERY.value
-            )
+            except Exception as e:
+                logger.warning(f"A005查询失败: {e}", extra={
+                    'session_id': request.session_id,
+                    'amount': amount,
+                    'pay_time': pay_time
+                })
+        
+        # 如果OCR提取失败或A005查询无结果，引导用户提供订单号
+        logger.info(f"OCR关键信息提取不完整，引导用户提供订单号", extra={
+            'session_id': request.session_id,
+            'has_amount': bool(amount),
+            'has_time': bool(pay_time),
+            'platform': ocr_result.get("platform")
+        })
+        
+        response_text = get_message_by_language({
+            "en": "I have received your deposit receipt image. To query your deposit status more accurately, please also provide the 18-digit deposit order number.",
+            "tl": "Nakatanggap na ako ng inyong deposit receipt image. Para mas tumpak na ma-query ang deposit status ninyo, magbigay din po ng 18-digit na deposit order number."
+        }, request.language)
+        
+        return ProcessingResult(
+            text=response_text,
+            stage=ResponseStage.WORKING.value,
+            transfer_human=0,
+            message_type=BusinessType.RECHARGE_QUERY.value
+        )
+    
     # 其余逻辑保持原有
     # 优先检查当前消息是否包含18位订单号，如果包含则直接进入stage 3处理
     current_message_order_no = extract_order_no(request.messages, [])  # 只检查当前消息，不包括历史
@@ -1310,27 +1333,28 @@ async def _handle_order_query_s002(request: MessageRequest, status_messages: Dic
 async def _process_withdrawal_status(status: str, status_messages: Dict, workflow: Dict, 
                                    request: MessageRequest, config: Dict) -> ProcessingResult:
     """处理提现状态"""
-    # 定义状态映射
+    # 定义状态映射 (message_key, stage, transfer_human, needs_telegram, tg_type)
     status_mapping = {
-        "Withdrawal successful": ("withdrawal_successful", ResponseStage.FINISH.value, 0, False),
-        "pending": ("withdrawal_processing", ResponseStage.FINISH.value, 0, False),
-        "obligation": ("withdrawal_processing", ResponseStage.FINISH.value, 0, False),
-        "canceled": ("withdrawal_canceled", ResponseStage.FINISH.value, 0, False),
-        "rejected": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True),
-        "prepare": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True),
-        "lock": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True),
-        "oblock": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True),
-        "refused": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True),
-        "Withdrawal failed": ("withdrawal_failed", ResponseStage.FINISH.value, 1, True),
-        "confiscate": ("withdrawal_failed", ResponseStage.FINISH.value, 1, True),
+        "Withdrawal successful": ("withdrawal_successful", ResponseStage.FINISH.value, 0, False, 1),
+        "pending": ("withdrawal_processing", ResponseStage.FINISH.value, 0, False, 1),
+        "obligation": ("withdrawal_processing", ResponseStage.FINISH.value, 0, False, 1),
+        "canceled": ("withdrawal_canceled", ResponseStage.FINISH.value, 0, False, 1),
+        "rejected": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True, 1),  # 后台TG
+        "prepare": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True, 1),
+        "lock": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True, 1),      # 后台TG
+        "oblock": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True, 1),
+        "refused": ("withdrawal_issue", ResponseStage.FINISH.value, 1, True, 1),
+        "Withdrawal failed": ("withdrawal_failed", ResponseStage.FINISH.value, 1, True, 2),  # 第三方TG
+        "confiscate": ("withdrawal_failed", ResponseStage.FINISH.value, 1, True, 1),
     }
-    message_key, stage, transfer_human, needs_telegram = status_mapping.get(
-        status, ("withdrawal_issue", ResponseStage.FINISH.value, 1, False)
+    status_info = status_mapping.get(
+        status, ("withdrawal_issue", ResponseStage.FINISH.value, 1, False, 1)
     )
+    message_key, stage, transfer_human, needs_telegram, tg_type = status_info
     # 发送TG通知（如果需要）
     telegram_notification = None
     if needs_telegram:
-        telegram_notification = await _send_telegram_notification(config, request, extract_order_no(request.messages, request.history), status)
+        telegram_notification = await _send_telegram_notification(config, request, extract_order_no(request.messages, request.history), status, tg_type)
     # 提现成功，追问用户是否收到款项
     if status == "Withdrawal successful":
         response_text = get_message_by_language(status_messages.get("withdrawal_successful", {}), request.language)
@@ -1388,9 +1412,16 @@ def _build_tg_query_info(order_id: str, business_type: int, tg_type: int = 1,
     }
 
 
-async def _send_telegram_notification(config: Dict, request: MessageRequest, order_no: str, status: str) -> Dict[str, Any]:
+async def _send_telegram_notification(config: Dict, request: MessageRequest, order_no: str, status: str, tg_type: int = 1) -> Dict[str, Any]:
     """
     发送Telegram通知
+    
+    Args:
+        config: 配置信息
+        request: 请求对象
+        order_no: 订单号
+        status: 状态
+        tg_type: TG类型 1:后台TG, 2:第三方TG
     
     Returns:
         Dict包含发送状态信息：
@@ -1399,24 +1430,30 @@ async def _send_telegram_notification(config: Dict, request: MessageRequest, ord
         - chat_id: str, 目标chat_id
         - message: str, 发送的消息内容
         - error: str, 错误信息（如果发送失败）
+        - tg_type: int, TG类型
     """
     bot_token = config.get("telegram_bot_token", "")
     telegram_config = config.get("telegram_notifications", {})
     
-    # 根据状态选择对应的群和消息内容
-    if status == "confiscate":
-        chat_id = telegram_config.get("confiscate_chat_id", "")
-        tg_message = f"🚨 资金没收\n用户ID: {request.user_id}\n订单号: {order_no}\n状态: {status}"
-        notification_type = "confiscate"
-    elif status == "Withdrawal failed":
+    # 根据tg_type和状态选择对应的群和消息内容
+    if tg_type == 2:  # 第三方TG (用于Withdrawal failed)
         chat_id = telegram_config.get("payment_failed_chat_id", "")
-        tg_message = f"⚠️ 支付失败\n用户ID: {request.user_id}\n订单号: {order_no}\n状态: {status}"
-        notification_type = "payment_failed"
-    else:
-        # 其他状态默认发到支付失败群
-        chat_id = telegram_config.get("payment_failed_chat_id", "")
-        tg_message = f"⚠️ 异常状态\n用户ID: {request.user_id}\n订单号: {order_no}\n状态: {status}"
-        notification_type = "payment_failed"
+        tg_message = f"⚠️ 第三方支付失败\n用户ID: {request.user_id}\n订单号: {order_no}\n状态: {status}"
+        notification_type = "third_party_payment_failed"
+    else:  # tg_type == 1, 后台TG (用于rejected/lock等状态)
+        if status == "confiscate":
+            chat_id = telegram_config.get("confiscate_chat_id", "")
+            tg_message = f"🚨 资金没收\n用户ID: {request.user_id}\n订单号: {order_no}\n状态: {status}"
+            notification_type = "confiscate"
+        elif status in ["rejected", "lock", "prepare", "oblock", "refused"]:
+            chat_id = telegram_config.get("payment_failed_chat_id", "")
+            tg_message = f"⚠️ 后台处理异常\n用户ID: {request.user_id}\n订单号: {order_no}\n状态: {status}"
+            notification_type = "backend_issue"
+        else:
+            # 其他状态默认发到后台处理群
+            chat_id = telegram_config.get("payment_failed_chat_id", "")
+            tg_message = f"⚠️ 状态异常\n用户ID: {request.user_id}\n订单号: {order_no}\n状态: {status}"
+            notification_type = "status_issue"
     
     # 初始化返回结果
     result = {
@@ -1424,7 +1461,8 @@ async def _send_telegram_notification(config: Dict, request: MessageRequest, ord
         "notification_type": notification_type,
         "chat_id": chat_id,
         "message": tg_message,
-        "error": None
+        "error": None,
+        "tg_type": tg_type
     }
     
     if bot_token and chat_id:
@@ -1435,14 +1473,16 @@ async def _send_telegram_notification(config: Dict, request: MessageRequest, ord
                 'chat_id': chat_id,
                 'user_id': request.user_id,
                 'order_no': order_no,
-                'notification_type': notification_type
+                'notification_type': notification_type,
+                'tg_type': tg_type
             })
             await send_to_telegram([], bot_token, chat_id, username=request.user_id, custom_message=tg_message)
             result["sent"] = True
             logger.info(f"Telegram通知发送成功", extra={
                 'session_id': request.session_id,
                 'notification_type': notification_type,
-                'chat_id': chat_id
+                'chat_id': chat_id,
+                'tg_type': tg_type
             })
         except Exception as e:
             result["error"] = str(e)
@@ -1450,7 +1490,8 @@ async def _send_telegram_notification(config: Dict, request: MessageRequest, ord
                 'session_id': request.session_id,
                 'status': status,
                 'chat_id': chat_id,
-                'error': str(e)
+                'error': str(e),
+                'tg_type': tg_type
             })
     else:
         result["error"] = "Telegram通知配置不完整"
@@ -1459,7 +1500,8 @@ async def _send_telegram_notification(config: Dict, request: MessageRequest, ord
             'status': status,
             'has_bot_token': bool(bot_token),
             'has_chat_id': bool(chat_id),
-            'notification_type': notification_type
+            'notification_type': notification_type,
+            'tg_type': tg_type
         })
     
     return result
@@ -2818,14 +2860,14 @@ async def check_explicit_not_received_inquiry(messages: str, language: str) -> O
     # 明确的没到账关键词组合
     explicit_not_received_patterns = {
         "deposit": {
-            "zh": ["充值没到账", "充值未到账", "充值没收到", "存款没到账", "存款未到账", "deposit没到账", "deposit没收到", "充钱没到账"],
+            "zh": ["充值没到账", "充值未到账", "充值没收到", "充值没到", "存款没到账", "存款未到账", "存款没到", "deposit没到账", "deposit没收到", "deposit没到", "充钱没到账", "充钱没到"],
             "en": ["deposit not received", "deposit not receive", "deposit didn't arrive", "haven't received deposit", "didn't get deposit", "deposit missing", "deposit not credited", "i don't receive my deposit", "i dont receive my deposit", "deposit no receive", "deposit didn't come"],
             "th": ["เงินฝากไม่ได้รับ", "ฝากเงินแล้วไม่ถึง", "deposit ไม่ได้รับ"],
             "tl": ["deposit hindi natatanggap", "hindi natatanggap ang deposit", "walang natanggap na deposit", "hindi pumasok deposit", "hindi dumating deposit", "hindi pa pumasok deposit", "deposit ko hindi pumasok"],
             "ja": ["入金が届いていない", "入金が受け取れない", "depositが届いていない"]
         },
         "withdrawal": {
-            "zh": ["提现没到账", "提现未到账", "提现没收到", "出金没到账", "出金未到账", "withdrawal没到账", "withdrawal没收到", "取钱没到账"],
+            "zh": ["提现没到账", "提现未到账", "提现没收到", "提现没到", "出金没到账", "出金未到账", "出金没到", "withdrawal没到账", "withdrawal没收到", "withdrawal没到", "取钱没到账", "取钱没到"],
             "en": ["withdrawal not received", "withdrawal not receive", "withdrawal didn't arrive", "haven't received withdrawal", "didn't get withdrawal", "withdrawal missing", "withdrawal not credited", "i don't receive my withdrawal", "i dont receive my withdrawal", "withdrawal no receive", "withdrawal didn't come"],
             "th": ["เงินถอนไม่ได้รับ", "ถอนเงินแล้วไม่ถึง", "withdrawal ไม่ได้รับ"],
             "tl": ["withdrawal hindi natatanggap", "hindi natatanggap ang withdrawal", "walang natanggap na withdrawal", "hindi pumasok withdrawal", "hindi dumating withdrawal", "hindi pa pumasok withdrawal", "withdrawal ko hindi pumasok"],
@@ -3212,19 +3254,30 @@ async def ocr_and_extract_payment_info(image, language="zh"):
         }
     """
     from src.util import call_openapi_model
+    logger = get_logger("chatai-api")
     # 构造OCR识别prompt
     prompt = f"""
-请对下述充值凭证图片做OCR识别，返回图片中所有可见的文字内容，并判断是否包含"Successful Payment via QR"和"maya"字样。
-同时请尽量提取图片中的支付金额（数字）和支付时间（如2025-07-09 22:00:00或类似格式）。
+请对下述充值凭证图片做OCR识别，返回图片中所有可见的文字内容，并判断是否包含支付成功的关键信息。
 
-图片内容：{image}
+支付成功的关键词包括但不限于：
+- "Successful Payment"、"Payment Successful"、"支付成功"、"转账成功"
+- "Transaction Successful"、"Transfer Successful"
+- "Sent"、"Paid"、"Complete"、"Completed"
+- "GCash"、"Maya"、"PayMaya"等支付平台名
+- 包含金额数字（如 ₱、PHP、元等货币符号）
+- 包含时间信息的转账记录
+
+请特别注意识别GCash、Maya、PayMaya、支付宝、微信支付等常见支付平台的转账成功界面。
+
+图片内容：![image.png](attachment:image.png)
 
 请以如下JSON格式返回：
 {{
-  "valid": true/false,  // 是否包含关键字
+  "valid": true/false,  // 是否包含支付成功关键字
   "amount": "金额字符串或null",
   "time": "时间字符串或null",
-  "raw_text": "图片所有文字内容"
+  "raw_text": "图片所有文字内容",
+  "platform": "识别到的支付平台名称或null"
 }}
 """
     result = await call_openapi_model(prompt=prompt)
@@ -3232,7 +3285,38 @@ async def ocr_and_extract_payment_info(image, language="zh"):
     try:
         import json
         info = json.loads(result)
+        
+        # 如果OCR识别失败，尝试基于原始文本进行关键词匹配
+        if not info.get("valid") and info.get("raw_text"):
+            raw_text = info["raw_text"].lower()
+            # 扩展的关键词列表
+            success_keywords = [
+                "successful payment", "payment successful", "支付成功", "转账成功",
+                "transaction successful", "transfer successful", "sent", "paid", 
+                "complete", "completed", "gcash", "maya", "paymaya", "支付宝", "微信支付",
+                "alipay", "wechat pay", "transfer complete", "payment complete"
+            ]
+            
+            # 货币符号和金额模式
+            currency_patterns = ["₱", "php", "元", "¥", "$", "rmb"]
+            
+            # 检查是否包含成功关键词
+            has_success_keyword = any(keyword in raw_text for keyword in success_keywords)
+            # 检查是否包含货币信息
+            has_currency = any(pattern in raw_text for pattern in currency_patterns)
+            
+            if has_success_keyword or has_currency:
+                info["valid"] = True
+                logger.info(f"基于关键词匹配判定图片有效", extra={
+                    'has_success_keyword': has_success_keyword,
+                    'has_currency': has_currency,
+                    'raw_text_sample': raw_text[:100]
+                })
+        
         return info
-    except Exception:
-        # 兜底：只返回原始文本
-        return {"valid": False, "amount": None, "time": None, "raw_text": result}
+    except Exception as e:
+        logger.warning(f"OCR结果解析失败: {e}", extra={
+            'raw_result': result[:200] if result else None
+        })
+        # 兜底：只返回原始文本，但设置为有效避免直接转人工
+        return {"valid": True, "amount": None, "time": None, "raw_text": result or "", "platform": None}
